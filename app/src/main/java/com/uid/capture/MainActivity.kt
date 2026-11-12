@@ -6,8 +6,9 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.alibaba.fastjson.JSON
 import io.netty.buffer.ByteBuf
-import io.netty.handler.codec.http.HttpRequest
+import io.netty.handler.codec.http.HttpObject
 import io.netty.handler.codec.http.HttpResponse
+import io.netty.handler.codec.http.LastHttpContent
 import org.littleshoot.proxy.HttpFilters
 import org.littleshoot.proxy.HttpFiltersAdapter
 import org.littleshoot.proxy.HttpFiltersSourceAdapter
@@ -42,30 +43,41 @@ class MainActivity : AppCompatActivity() {
         proxyServer = DefaultHttpProxyServer.bootstrap()
             .withPort(8888)
             .withFiltersSource(object : HttpFiltersSourceAdapter() {
-                override fun filterRequest(request: HttpRequest): HttpFilters {
-                    return object : HttpFiltersAdapter(request) {
-                        // ✅ 正确重写方法 serverToClientResponse
-                        override fun serverToClientResponse(response: HttpResponse): HttpResponse? {
-                            val host = originalRequest.headers().get("Host") ?: ""
-                            val path = originalRequest.uri ?: ""
-                            if (host.contains("logs.quickapi.net") && path.contains("checkLogin")) {
-                                val buf: ByteBuf = response.content()
-                                val content = buf.toString(StandardCharsets.UTF_8)
-                                try {
-                                    val jsonObj = JSON.parseObject(content)
-                                    val data = jsonObj.getJSONObject("data")
-                                    val uid = data.getString("uid")
-                                    val token = data.getString("token")
-                                    runOnUiThread {
-                                        tvResult.text = "✅抓到登录信息\nuid: $uid\ntoken:$token"
-                                    }
-                                } catch (e: Exception) {
-                                    runOnUiThread {
-                                        tvResult.text = "解析失败:${e.message}"
+                override fun filterRequest(originalRequest: io.netty.handler.codec.http.HttpRequest): HttpFilters {
+                    return object : HttpFiltersAdapter(originalRequest) {
+                        var responseBodyBuffer = StringBuilder()
+                        val req = originalRequest
+
+                        // ✅ 正确方法：serverToProxyResponse(HttpObject)
+                        override fun serverToProxyResponse(httpObject: HttpObject): HttpObject {
+                            if (httpObject is HttpResponse) {
+                                // 响应头到达，清空buffer
+                                responseBodyBuffer.clear()
+                            }
+                            if (httpObject is LastHttpContent) {
+                                // 响应body全部接收完毕
+                                val host = req.headers().get("Host") ?: ""
+                                val path = req.uri ?: ""
+                                if (host.contains("logs.quickapi.net") && path.contains("checkLogin")) {
+                                    val buf: ByteBuf = httpObject.content()
+                                    val bodyStr = buf.toString(StandardCharsets.UTF_8)
+                                    responseBodyBuffer.append(bodyStr)
+                                    try {
+                                        val jsonObj = JSON.parseObject(responseBodyBuffer.toString())
+                                        val data = jsonObj.getJSONObject("data")
+                                        val uid = data.getString("uid")
+                                        val token = data.getString("token")
+                                        runOnUiThread {
+                                            tvResult.text = "✅抓到登录信息\nuid: $uid\ntoken:$token"
+                                        }
+                                    } catch (e: Exception) {
+                                        runOnUiThread {
+                                            tvResult.text = "解析失败:${e.message}"
+                                        }
                                     }
                                 }
                             }
-                            return super.serverToClientResponse(response)
+                            return super.serverToProxyResponse(httpObject)
                         }
                     }
                 }
