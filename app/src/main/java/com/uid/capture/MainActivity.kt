@@ -44,34 +44,28 @@ class MainActivity : AppCompatActivity() {
             .withFiltersSource(object : HttpFiltersSourceAdapter() {
                 override fun filterRequest(request: HttpRequest): HttpFilters {
                     return object : HttpFiltersAdapter(request) {
-                        // ✅ 正确方法：serverResponse，这个是HttpFilters里定义的
-                        override fun serverResponse(
-                            request: HttpRequest?,
-                            response: HttpResponse?
-                        ): HttpResponse? {
-                            val host = request?.headers()?.get("Host") ?: ""
-                            val path = request?.uri ?: ""
+                        // ✅ 正确重写方法 serverToClientResponse
+                        override fun serverToClientResponse(response: HttpResponse): HttpResponse? {
+                            val host = originalRequest.headers().get("Host") ?: ""
+                            val path = originalRequest.uri ?: ""
                             if (host.contains("logs.quickapi.net") && path.contains("checkLogin")) {
-                                val buf: ByteBuf? = response?.content()
-                                buf?.let {
-                                    // 标准读取ByteBuf字符串，避开ByteBufUtil私有方法
-                                    val content = it.toString(StandardCharsets.UTF_8)
-                                    try {
-                                        val jsonObj = JSON.parseObject(content)
-                                        val data = jsonObj.getJSONObject("data")
-                                        val uid = data.getString("uid")
-                                        val token = data.getString("token")
-                                        runOnUiThread {
-                                            tvResult.text = "✅抓到登录信息\nuid: $uid\ntoken:$token"
-                                        }
-                                    } catch (e: Exception) {
-                                        runOnUiThread {
-                                            tvResult.text = "解析失败:${e.message}"
-                                        }
+                                val buf: ByteBuf = response.content()
+                                val content = buf.toString(StandardCharsets.UTF_8)
+                                try {
+                                    val jsonObj = JSON.parseObject(content)
+                                    val data = jsonObj.getJSONObject("data")
+                                    val uid = data.getString("uid")
+                                    val token = data.getString("token")
+                                    runOnUiThread {
+                                        tvResult.text = "✅抓到登录信息\nuid: $uid\ntoken:$token"
+                                    }
+                                } catch (e: Exception) {
+                                    runOnUiThread {
+                                        tvResult.text = "解析失败:${e.message}"
                                     }
                                 }
                             }
-                            return super.serverResponse(request, response)
+                            return super.serverToClientResponse(response)
                         }
                     }
                 }
