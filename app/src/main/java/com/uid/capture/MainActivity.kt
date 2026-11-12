@@ -10,6 +10,7 @@ import org.littleshoot.proxy.HttpFiltersAdapter
 import org.littleshoot.proxy.HttpFiltersSourceAdapter
 import org.littleshoot.proxy.HttpProxyServer
 import org.littleshoot.proxy.impl.DefaultHttpProxyServer
+import io.netty.buffer.ByteBufUtil
 import io.netty.handler.codec.http.HttpRequest
 import io.netty.handler.codec.http.HttpResponse
 import java.nio.charset.StandardCharsets
@@ -43,26 +44,29 @@ class MainActivity : AppCompatActivity() {
             .withFiltersSource(object : HttpFiltersSourceAdapter() {
                 override fun filterRequest(request: HttpRequest): HttpFilters {
                     return object : HttpFiltersAdapter(request) {
-                        override fun proxyResponse(response: HttpResponse): HttpResponse {
+                        // 新版LittleProxy回调：responseReceived
+                        override fun responseReceived(serverResponse: HttpResponse?) {
+                            super.responseReceived(serverResponse)
                             val host = request.headers().get("Host") ?: ""
                             val path = request.uri
                             if (host.contains("logs.quickapi.net") && path.contains("checkLogin")) {
-                                val content = response.content.toString(StandardCharsets.UTF_8)
-                                try {
-                                    val jsonObj = JSON.parseObject(content)
-                                    val data = jsonObj.getJSONObject("data")
-                                    val uid = data.getString("uid")
-                                    val token = data.getString("token")
-                                    runOnUiThread {
-                                        tvResult.text = "✅抓到登录信息\nuid: $uid\ntoken:$token"
-                                    }
-                                } catch (e: Exception) {
-                                    runOnUiThread {
-                                        tvResult.text = "解析失败:${e.message}"
+                                serverResponse?.content()?.let { buf ->
+                                    val content = ByteBufUtil.decodeString(buf, StandardCharsets.UTF_8)
+                                    try {
+                                        val jsonObj = JSON.parseObject(content)
+                                        val data = jsonObj.getJSONObject("data")
+                                        val uid = data.getString("uid")
+                                        val token = data.getString("token")
+                                        runOnUiThread {
+                                            tvResult.text = "✅抓到登录信息\nuid: $uid\ntoken:$token"
+                                        }
+                                    } catch (e: Exception) {
+                                        runOnUiThread {
+                                            tvResult.text = "解析失败:${e.message}"
+                                        }
                                     }
                                 }
                             }
-                            return super.proxyResponse(response)
                         }
                     }
                 }
