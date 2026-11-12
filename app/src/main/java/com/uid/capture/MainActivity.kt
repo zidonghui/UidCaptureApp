@@ -5,14 +5,14 @@ import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.alibaba.fastjson.JSON
+import io.netty.buffer.ByteBuf
+import io.netty.handler.codec.http.HttpRequest
+import io.netty.handler.codec.http.HttpResponse
 import org.littleshoot.proxy.HttpFilters
 import org.littleshoot.proxy.HttpFiltersAdapter
 import org.littleshoot.proxy.HttpFiltersSourceAdapter
 import org.littleshoot.proxy.HttpProxyServer
 import org.littleshoot.proxy.impl.DefaultHttpProxyServer
-import io.netty.buffer.ByteBufUtil
-import io.netty.handler.codec.http.HttpRequest
-import io.netty.handler.codec.http.HttpResponse
 import java.nio.charset.StandardCharsets
 
 class MainActivity : AppCompatActivity() {
@@ -44,14 +44,18 @@ class MainActivity : AppCompatActivity() {
             .withFiltersSource(object : HttpFiltersSourceAdapter() {
                 override fun filterRequest(request: HttpRequest): HttpFilters {
                     return object : HttpFiltersAdapter(request) {
-                        // 新版LittleProxy回调：responseReceived
-                        override fun responseReceived(serverResponse: HttpResponse?) {
-                            super.responseReceived(serverResponse)
-                            val host = request.headers().get("Host") ?: ""
-                            val path = request.uri
+                        // ✅ 正确方法：serverResponse，这个是HttpFilters里定义的
+                        override fun serverResponse(
+                            request: HttpRequest?,
+                            response: HttpResponse?
+                        ): HttpResponse? {
+                            val host = request?.headers()?.get("Host") ?: ""
+                            val path = request?.uri ?: ""
                             if (host.contains("logs.quickapi.net") && path.contains("checkLogin")) {
-                                serverResponse?.content()?.let { buf ->
-                                    val content = ByteBufUtil.decodeString(buf, StandardCharsets.UTF_8)
+                                val buf: ByteBuf? = response?.content()
+                                buf?.let {
+                                    // 标准读取ByteBuf字符串，避开ByteBufUtil私有方法
+                                    val content = it.toString(StandardCharsets.UTF_8)
                                     try {
                                         val jsonObj = JSON.parseObject(content)
                                         val data = jsonObj.getJSONObject("data")
@@ -67,6 +71,7 @@ class MainActivity : AppCompatActivity() {
                                     }
                                 }
                             }
+                            return super.serverResponse(request, response)
                         }
                     }
                 }
