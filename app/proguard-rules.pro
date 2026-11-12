@@ -1,0 +1,4 @@
+-keep class org.littleshoot.proxy.** {*;}
+-keep class com.alibaba.fastjson.** {*;}
+-dontwarn org.littleshoot.proxy.**
+-dontwarn io.netty.**
