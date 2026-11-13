@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.zip.GZIPInputStream;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpObject;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
@@ -71,28 +72,20 @@ public class TunnelingVpnService extends VpnService {
     private void notifyStatus(String status) {
         Log.d(TAG, "状态: " + status);
         CaptureCallback cb = callback;
-        if (cb != null) {
-            cb.onStatusChanged(status);
-        }
+        if (cb != null) cb.onStatusChanged(status);
     }
 
     private void notifyDebug(String log) {
         Log.d(TAG, "调试: " + log);
         CaptureCallback cb = callback;
-        if (cb != null) {
-            cb.onDebugLog(log);
-        }
+        if (cb != null) cb.onDebugLog(log);
     }
 
     private void notifyCaptured(CapturedData data) {
         CaptureCallback cb = callback;
-        if (cb != null) {
-            cb.onCaptured(data);
-        }
+        if (cb != null) cb.onCaptured(data);
         new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
-            try {
-                Toast.makeText(this, "✅ 捕获UID: " + data.uid, Toast.LENGTH_LONG).show();
-            } catch (Exception ignored) {}
+            try { Toast.makeText(this, "✅ 捕获UID: " + data.uid, Toast.LENGTH_LONG).show(); } catch (Exception ignored) {}
         });
         showCapturedNotification(data.uid);
     }
@@ -102,7 +95,7 @@ public class TunnelingVpnService extends VpnService {
             System.loadLibrary("tun2http");
             Log.d(TAG, "native库加载成功");
         } catch (UnsatisfiedLinkError e) {
-            Log.e(TAG, "native库加载失败! 架构不兼容?", e);
+            Log.e(TAG, "native库加载失败!", e);
         }
     }
 
@@ -126,9 +119,7 @@ public class TunnelingVpnService extends VpnService {
             stopVpn();
             return START_NOT_STICKY;
         }
-        try {
-            startVpn();
-        } catch (Exception e) {
+        try { startVpn(); } catch (Exception e) {
             Log.e(TAG, "startVpn异常", e);
             notifyStatus("❌ 启动失败: " + e.getMessage());
         }
@@ -138,7 +129,6 @@ public class TunnelingVpnService extends VpnService {
     private void startVpn() {
         startForeground(NOTIFICATION_ID, buildNotification("VPN抓包运行中"));
 
-        // 1. Start LittleProxy
         notifyStatus("正在启动本地代理...");
         try {
             proxyServer = DefaultHttpProxyServer.bootstrap()
@@ -147,9 +137,11 @@ public class TunnelingVpnService extends VpnService {
                         @Override
                         public HttpFilters filterRequest(HttpRequest originalRequest) {
                             requestCount++;
+                            String method = originalRequest.method().name();
                             String host = originalRequest.headers().get("Host");
                             String uri = originalRequest.uri();
-                            notifyDebug("#" + requestCount + " " + host + uri);
+                            // 打印所有请求，包括GET/POST/CONNECT
+                            notifyDebug("#" + requestCount + " " + method + " " + host + uri);
 
                             return new HttpFiltersAdapter(originalRequest) {
                                 private final ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
@@ -162,10 +154,14 @@ public class TunnelingVpnService extends VpnService {
                                         HttpRequest req = (HttpRequest) httpObject;
                                         String h = req.headers().get("Host");
                                         String u = req.uri();
+                                        String m = req.method().name();
+
+                                        // 检查是否目标请求（HTTP明文请求）
                                         if (h != null && h.contains("logs.quickapi.net")
                                                 && u != null && u.contains("checkLogin")) {
                                             isTargetRequest = true;
-                                            Log.d(TAG, "🎯 命中目标请求: " + h + u);
+                                            Log.d(TAG, "🎯 命中目标请求: " + m + " " + h + u);
+                                            notifyDebug("🎯 命中目标: " + m + " " + h + u);
                                         }
                                     }
                                     return super.proxyToServerRequest(httpObject);
@@ -206,8 +202,6 @@ public class TunnelingVpnService extends VpnService {
             return;
         }
 
-        // 2. Establish VPN
-        notifyStatus("正在建立VPN连接...");
         Builder builder = new Builder();
         builder.setSession("UidCapture VPN");
         builder.setConfigureIntent(PendingIntent.getActivity(
@@ -223,9 +217,7 @@ public class TunnelingVpnService extends VpnService {
         if (dnsServers.isEmpty()) {
             builder.addDnsServer("8.8.8.8");
         } else {
-            for (String dns : dnsServers) {
-                builder.addDnsServer(dns);
-            }
+            for (String dns : dnsServers) builder.addDnsServer(dns);
         }
 
         try { builder.addDisallowedApplication(getPackageName()); } catch (Exception e) {}
@@ -240,16 +232,15 @@ public class TunnelingVpnService extends VpnService {
         }
 
         if (vpnInterface == null) {
-            notifyStatus("❌ VPN建立失败，返回null");
+            notifyStatus("❌ VPN建立失败");
             stopVpn();
             return;
         }
 
-        // 3. Start native tun2http
         notifyStatus("正在转发流量到代理...");
         try {
             jni_start(vpnInterface.getFd(), false, 3, "127.0.0.1", PROXY_PORT, true);
-            notifyStatus("✅ VPN抓包已启动\n\n请打开游戏并登录\nUID将自动显示在这里\n\n--- 调试: 经过代理的请求 ---\n");
+            notifyStatus("✅ VPN抓包已启动\n\n请打开游戏并登录\n\n--- 调试: 经过代理的请求 ---");
         } catch (Throwable t) {
             Log.e(TAG, "jni_start失败", t);
             notifyStatus("❌ 流量转发失败: " + t.getMessage());
@@ -265,9 +256,7 @@ public class TunnelingVpnService extends VpnService {
                 ByteArrayOutputStream bos = new ByteArrayOutputStream();
                 byte[] buffer = new byte[4096];
                 int len;
-                while ((len = gis.read(buffer)) != -1) {
-                    bos.write(buffer, 0, len);
-                }
+                while ((len = gis.read(buffer)) != -1) bos.write(buffer, 0, len);
                 body = bos.toString("UTF-8");
                 gis.close();
             } else {
@@ -304,22 +293,17 @@ public class TunnelingVpnService extends VpnService {
                 vpnInterface = null;
             }
         } catch (Exception e) {}
-
         if (proxyServer != null) {
             try { proxyServer.stop(); } catch (Exception ignored) {}
             proxyServer = null;
         }
-
         notifyStatus("VPN已停止");
         stopForeground(true);
         stopSelf();
     }
 
     @Override
-    public void onRevoke() {
-        super.onRevoke();
-        stopVpn();
-    }
+    public void onRevoke() { super.onRevoke(); stopVpn(); }
 
     @Override
     public void onDestroy() {
@@ -333,9 +317,7 @@ public class TunnelingVpnService extends VpnService {
         try {
             for (int i = 1; i <= 4; i++) {
                 String dns = jni_getprop("net.dns" + i);
-                if (dns != null && !dns.isEmpty()) {
-                    servers.add(dns);
-                }
+                if (dns != null && !dns.isEmpty()) servers.add(dns);
             }
         } catch (Exception ignored) {}
         return servers;
