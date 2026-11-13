@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -28,11 +29,22 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
 
     companion object {
         private const val VPN_REQUEST_CODE = 1001
+        private const val TAG = "UidCapture"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        // 全局异常捕获，防止闪退
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            Log.e(TAG, "未捕获异常", throwable)
+            val errorMsg = "崩溃: ${throwable.javaClass.simpleName}: ${throwable.message}"
+            runOnUiThread {
+                tvStatus.text = errorMsg
+                Toast.makeText(this, errorMsg, Toast.LENGTH_LONG).show()
+            }
+        }
 
         tvStatus = findViewById(R.id.tvStatus)
         tvUid = findViewById(R.id.tvUid)
@@ -46,7 +58,12 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
             if (vpnRunning) {
                 stopVpn()
             } else {
-                prepareAndStartVpn()
+                try {
+                    prepareAndStartVpn()
+                } catch (e: Exception) {
+                    tvStatus.text = "启动失败: ${e.message}"
+                    Log.e(TAG, "启动VPN失败", e)
+                }
             }
         }
 
@@ -78,6 +95,7 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
     }
 
     private fun prepareAndStartVpn() {
+        tvStatus.text = "正在准备VPN权限..."
         val prepareIntent = VpnService.prepare(this)
         if (prepareIntent != null) {
             startActivityForResult(prepareIntent, VPN_REQUEST_CODE)
@@ -97,11 +115,16 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
     }
 
     private fun startVpn() {
-        val intent = Intent(this, TunnelingVpnService::class.java)
-        startService(intent)
-        vpnRunning = true
-        btnToggle.text = "停止VPN抓包"
-        tvStatus.text = "正在启动VPN..."
+        tvStatus.text = "正在启动VPN服务..."
+        try {
+            val intent = Intent(this, TunnelingVpnService::class.java)
+            startService(intent)
+            vpnRunning = true
+            btnToggle.text = "停止VPN抓包"
+        } catch (e: Exception) {
+            tvStatus.text = "启动服务失败: ${e.message}"
+            Log.e(TAG, "startService失败", e)
+        }
     }
 
     private fun stopVpn() {
