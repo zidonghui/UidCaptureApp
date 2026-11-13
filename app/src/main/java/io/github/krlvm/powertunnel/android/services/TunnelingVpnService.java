@@ -144,9 +144,14 @@ public class TunnelingVpnService extends VpnService {
                             String host = originalRequest.headers().get("Host");
                             String uri = originalRequest.uri();
 
-                            // 过滤掉CONNECT请求，只显示普通HTTP请求
-                            if (!"CONNECT".equals(method)) {
-                                notifyDebug("#" + requestCount + " " + method + " " + host + uri);
+                            // 所有请求都打印，包括CONNECT
+                            notifyDebug("#" + requestCount + " " + method + " " + host + uri);
+
+                            // 专门检测 logs.quickapi.net 的所有请求（包括CONNECT）
+                            String fullUrl = (host != null ? host : "") + (uri != null ? uri : "");
+                            if (fullUrl.contains("logs.quickapi.net")) {
+                                notifyTargetHit("🎯 检测到 logs.quickapi.net 请求: " + method + " " + fullUrl);
+                                Log.d(TAG, "🎯 检测到目标域名: " + method + " " + fullUrl);
                             }
 
                             return new HttpFiltersAdapter(originalRequest) {
@@ -161,11 +166,12 @@ public class TunnelingVpnService extends VpnService {
                                         String h = req.headers().get("Host");
                                         String u = req.uri();
 
+                                        // 只对HTTP明文POST/GET请求做响应解析
                                         if (h != null && h.contains("logs.quickapi.net")
-                                                && u != null && u.contains("checkLogin")) {
+                                                && u != null && u.contains("checkLogin")
+                                                && !"CONNECT".equals(req.method().name())) {
                                             isTargetRequest = true;
-                                            Log.d(TAG, "🎯 命中目标请求: " + h + u);
-                                            notifyTargetHit("🎯 命中: " + h + u);
+                                            Log.d(TAG, "🎯 命中目标HTTP请求: " + h + u);
                                         }
                                     }
                                     return super.proxyToServerRequest(httpObject);
@@ -244,7 +250,7 @@ public class TunnelingVpnService extends VpnService {
         notifyStatus("正在转发流量到代理...");
         try {
             jni_start(vpnInterface.getFd(), false, 3, "127.0.0.1", PROXY_PORT, true);
-            notifyStatus("✅ VPN抓包已启动\n\n请打开游戏并登录\n\n--- 调试: HTTP请求（已过滤CONNECT）---");
+            notifyStatus("✅ VPN抓包已启动\n\n请打开游戏并登录\n\n--- 调试: 所有请求 ---");
         } catch (Throwable t) {
             Log.e(TAG, "jni_start失败", t);
             notifyStatus("❌ 流量转发失败: " + t.getMessage());
