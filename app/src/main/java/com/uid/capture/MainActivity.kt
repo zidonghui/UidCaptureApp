@@ -42,6 +42,7 @@ class MainActivity : AppCompatActivity() {
         btnStart.setOnClickListener {
             val prepareIntent = VpnService.prepare(this)
             if (prepareIntent != null) {
+                @Suppress("DEPRECATION")
                 startActivityForResult(prepareIntent, VPN_REQUEST_CODE)
             } else {
                 startVpn()
@@ -54,7 +55,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    @Deprecated("Deprecated in Java")
+    @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == VPN_REQUEST_CODE && resultCode == RESULT_OK) {
