@@ -11,6 +11,8 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
@@ -25,7 +27,8 @@ class VpnCaptureService : VpnService() {
         private const val NOTIFICATION_ID = 1
     }
 
-    private val sessions = ConcurrentHashMap<String, TcpSession>()
+    private val tcpSessions = ConcurrentHashMap<String, TcpSession>()
+    private val dnsSocket = DatagramSocket()
 
     override fun onStartCommand(intent: android.content.Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildNotification())
@@ -50,6 +53,7 @@ class VpnCaptureService : VpnService() {
                     return@Thread
                 }
 
+                protect(dnsSocket)
                 MainActivity.onLog?.invoke("✅ VPN已启动，双向转发中")
                 val fis = FileInputStream(vpnInterface!!.fileDescriptor)
                 val fos = FileOutputStream(vpnInterface!!.fileDescriptor)
@@ -77,69 +81,156 @@ class VpnCaptureService : VpnService() {
 
             bb.position(9)
             val protocol = bb.get().toInt()
-            if (protocol != 6) return
 
             bb.position(12)
-            val srcIpBytes = ByteArray(4)
-            bb.get(srcIpBytes)
-            val dstIpBytes = ByteArray(4)
-            bb.get(dstIpBytes)
+            val srcIp = ByteArray(4)
+            bb.get(srcIp)
+            val dstIp = ByteArray(4)
+            bb.get(dstIp)
 
-            bb.position(ihl)
-            val srcPort = bb.short.toInt() and 0xFFFF
-            val dstPort = bb.short.toInt() and 0xFFFF
-            val seqNum = bb.int
-            val ackNum = bb.int
-            val dataOffsetFlags = bb.short.toInt()
-            val dataOffset = (dataOffsetFlags shr 12 and 0xF) * 4
-            val flags = dataOffsetFlags and 0x1FF
-            val fin = flags and 0x01
-            val syn = flags and 0x02
-            val rst = flags and 0x04
-            val psh = flags and 0x08
-            val ack = flags and 0x10
-
-            val srcIpStr = srcIpBytes.joinToString(".") { (it.toInt() and 0xFF).toString() }
-            val dstIpStr = dstIpBytes.joinToString(".") { (it.toInt() and 0xFF).toString() }
-            val sessionKey = "$srcIpStr:$srcPort"
-            val payloadStart = ihl + dataOffset
-            val payloadLen = length - payloadStart
-
-            when {
-                syn != 0 && ack == 0 -> {
-                    MainActivity.onLog?.invoke("🔌 新连接: $srcIpStr:$srcPort -> $dstIpStr:$dstPort")
-                    val session = TcpSession(
-                        srcIpBytes, srcPort, dstIpBytes, dstPort, fos, seqNum
-                    )
-                    sessions[sessionKey] = session
-                    session.start()
-                }
-                rst != 0 -> {
-                    sessions.remove(sessionKey)?.close()
-                }
-                fin != 0 -> {
-                    sessions.remove(sessionKey)?.onFin()
-                }
-                payloadLen > 0 -> {
-                    val session = sessions[sessionKey]
-                    if (session != null) {
-                        val payload = ByteArray(payloadLen)
-                        bb.position(payloadStart)
-                        bb.get(payload)
-                        
-                        val payloadStr = String(payload)
-                        if (dstPort == 80 && (payloadStr.contains("logs.quickapi.net") || payloadStr.contains("checkLogin"))) {
-                            MainActivity.onLog?.invoke("🎯 检测到目标请求")
-                        }
-                        
-                        session.sendClientData(payload, seqNum)
-                    }
-                }
+            when (protocol) {
+                6 -> processTcpPacket(data, length, srcIp, dstIp, ihl, fos)
+                17 -> processUdpPacket(data, length, srcIp, dstIp, ihl, fos)
             }
 
         } catch (e: Exception) {
             Log.e(TAG, "处理包错误", e)
         }
+    }
+
+    private fun processTcpPacket(data: ByteArray, length: Int, srcIp: ByteArray, dstIp: ByteArray, ihl: Int, fos: FileOutputStream) {
+        val bb = ByteBuffer.wrap(data, 0, length).order(ByteOrder.BIG_ENDIAN)
+        bb.position(ihl)
+        val srcPort = bb.short.toInt() and 0xFFFF
+        val dstPort = bb.short.toInt() and 0xFFFF
+        val seqNum = bb.int
+        val ackNum = bb.int
+        val dataOffsetFlags = bb.short.toInt()
+        val dataOffset = (dataOffsetFlags shr 12 and 0xF) * 4
+        val flags = dataOffsetFlags and 0x1FF
+        val fin = flags and 0x01
+        val syn = flags and 0x02
+        val rst = flags and 0x04
+        val psh = flags and 0x08
+        val ack = flags and 0x10
+
+        val sessionKey = "${srcIp.joinToString(".") { (it.toInt() and 0xFF).toString() }}:$srcPort"
+        val payloadStart = ihl + dataOffset
+        val payloadLen = length - payloadStart
+
+        when {
+            syn != 0 && ack == 0 -> {
+                MainActivity.onLog?.invoke("🔌 新TCP连接: $sessionKey -> ${dstIp.joinToString(".") { (it.toInt() and 0xFF).toString() }}:$dstPort")
+                val session = TcpSession(srcIp, srcPort, dstIp, dstPort, fos, seqNum)
+                tcpSessions[sessionKey] = session
+                session.start()
+            }
+            rst != 0 -> {
+                tcpSessions.remove(sessionKey)?.close()
+            }
+            fin != 0 -> {
+                tcpSessions.remove(sessionKey)?.onFin()
+            }
+            payloadLen > 0 -> {
+                val session = tcpSessions[sessionKey]
+                if (session != null) {
+                    val payload = ByteArray(payloadLen)
+                    bb.position(payloadStart)
+                    bb.get(payload)
+                    session.sendClientData(payload, seqNum)
+                }
+            }
+        }
+    }
+
+    private fun processUdpPacket(data: ByteArray, length: Int, srcIp: ByteArray, dstIp: ByteArray, ihl: Int, fos: FileOutputStream) {
+        val bb = ByteBuffer.wrap(data, 0, length).order(ByteOrder.BIG_ENDIAN)
+        bb.position(ihl)
+        val srcPort = bb.short.toInt() and 0xFFFF
+        val dstPort = bb.short.toInt() and 0xFFFF
+
+        // 只处理DNS请求（53端口）
+        if (dstPort != 53) return
+
+        val payloadStart = ihl + 8
+        val payloadLen = length - payloadStart
+        val dnsQuery = ByteArray(payloadLen)
+        bb.position(payloadStart)
+        bb.get(dnsQuery)
+
+        Thread {
+            try {
+                // 转发DNS请求到8.8.8.8
+                dnsSocket.send(DatagramPacket(dnsQuery, dnsQuery.size, InetSocketAddress("8.8.8.8", 53)))
+                
+                // 接收DNS响应
+                val responseBuf = ByteArray(1024)
+                dnsSocket.soTimeout = 5000
+                val responsePacket = DatagramPacket(responseBuf, responseBuf.size)
+                dnsSocket.receive(responsePacket)
+
+                // 封装成IP+UDP包写回TUN
+                sendUdpResponse(srcIp, srcPort, dstIp, responsePacket.data, responsePacket.length, fos)
+            } catch (e: Exception) {
+                Log.e(TAG, "DNS错误", e)
+            }
+        }.start()
+    }
+
+    private fun sendUdpResponse(srcIp: ByteArray, srcPort: Int, dstIp: ByteArray, data: ByteArray, length: Int, fos: FileOutputStream) {
+        try {
+            val udpLen = 8 + length
+            val ipLen = 20 + udpLen
+            val packet = ByteArray(ipLen)
+            val bb = ByteBuffer.wrap(packet).order(ByteOrder.BIG_ENDIAN)
+
+            // IP头
+            bb.put(0x45)
+            bb.put(0x00)
+            bb.putShort(ipLen.toShort())
+            bb.putShort(0)
+            bb.putShort(0x4000.toShort())
+            bb.put(64.toByte())
+            bb.put(17) // UDP
+            bb.putShort(0)
+            bb.put(dstIp) // 源IP是原来的目标IP（DNS服务器）
+            bb.put(srcIp) // 目标IP是原来的源IP（客户端）
+
+            // UDP头
+            bb.putShort(53.toShort()) // 源端口53
+            bb.putShort(srcPort.toShort()) // 目标端口
+            bb.putShort(udpLen.toShort())
+            bb.putShort(0) // checksum
+
+            // payload
+            bb.put(data, 0, length)
+
+            // 计算IP校验和
+            val ipChecksum = calculateChecksum(packet, 0, 20)
+            bb.position(10)
+            bb.putShort(ipChecksum)
+
+            fos.write(packet)
+            fos.flush()
+        } catch (e: Exception) {
+            Log.e(TAG, "发送UDP响应错误", e)
+        }
+    }
+
+    private fun calculateChecksum(data: ByteArray, offset: Int, length: Int): Short {
+        var sum = 0L
+        var i = offset
+        while (i < offset + length - 1) {
+            sum += ((data[i].toInt() and 0xFF) shl 8) or (data[i + 1].toInt() and 0xFF)
+            i += 2
+        }
+        if (offset + length - 1 < offset + length) {
+            sum += (data[offset + length - 1].toInt() and 0xFF) shl 8
+        }
+        while (sum shr 16 > 0) {
+            sum = (sum and 0xFFFF) + (sum shr 16)
+        }
+        return (sum.inv() and 0xFFFF).toShort()
     }
 
     private inner class TcpSession(
@@ -152,7 +243,7 @@ class VpnCaptureService : VpnService() {
     ) {
         private var socket: Socket? = null
         private var running = false
-        private var serverSeq: Int = 1000
+        private var serverSeq: Int = (Math.random() * 1000000).toInt()
 
         fun start() {
             running = true
@@ -161,7 +252,7 @@ class VpnCaptureService : VpnService() {
                     socket = Socket()
                     protect(socket!!)
                     socket!!.connect(InetSocketAddress(dstIp.joinToString(".") { (it.toInt() and 0xFF).toString() }, dstPort), 10000)
-                    MainActivity.onLog?.invoke("✅ 已连接服务器: ${dstIp.joinToString(".") { (it.toInt() and 0xFF).toString() }}:$dstPort")
+                    MainActivity.onLog?.invoke("✅ 已连接服务器")
 
                     // 回SYN+ACK给客户端
                     sendTcpPacket(clientSeq + 1, 0x12, ByteArray(0))
@@ -190,7 +281,7 @@ class VpnCaptureService : VpnService() {
                                 }
 
                                 // 把服务器响应封装成IP+TCP包，写回TUN
-                                sendToClient(data)
+                                sendTcpPacket(clientSeq + 1, 0x18, data) // PSH+ACK
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "读服务器错误", e)
@@ -199,7 +290,6 @@ class VpnCaptureService : VpnService() {
 
                 } catch (e: Exception) {
                     Log.e(TAG, "连接服务器失败", e)
-                    MainActivity.onLog?.invoke("❌ 连接失败: ${e.message}")
                 }
             }.start()
         }
@@ -215,11 +305,6 @@ class VpnCaptureService : VpnService() {
             } catch (e: Exception) {
                 Log.e(TAG, "发送客户端数据错误", e)
             }
-        }
-
-        private fun sendToClient(data: ByteArray) {
-            sendTcpPacket(clientSeq + 1, 0x18, data) // PSH+ACK
-            serverSeq += data.size
         }
 
         private fun sendTcpPacket(ackNum: Int, flags: Int, payload: ByteArray) {
@@ -249,35 +334,59 @@ class VpnCaptureService : VpnService() {
                 bb.putInt(ackNum) // 确认号
                 bb.putShort((0x5000 or flags).toShort()) // data offset + flags
                 bb.putShort(1460.toShort()) // window
-                bb.putShort(0) // checksum
+                bb.putShort(0) // checksum 先填0
                 bb.putShort(0) // urgent pointer
 
                 // payload
                 bb.put(payload)
 
                 // 计算IP校验和
-                bb.position(10)
-                var sum = 0L
-                for (i in 0 until 10) {
-                    sum += (bb.short.toLong() and 0xFFFF)
-                }
-                while (sum shr 16 > 0) {
-                    sum = (sum and 0xFFFF) + (sum shr 16)
-                }
-                val ipChecksum = (sum.inv() and 0xFFFF).toShort()
+                val ipChecksum = calculateChecksum(packet, 0, 20)
                 bb.position(10)
                 bb.putShort(ipChecksum)
+
+                // 计算TCP校验和（需要伪首部）
+                val tcpChecksum = calculateTcpChecksum(packet, dstIp, srcIp, tcpLen)
+                bb.position(36) // TCP checksum位置（IP头20 + TCP头16）
+                bb.putShort(tcpChecksum)
 
                 // 写回TUN设备
                 fos.write(packet)
                 fos.flush()
 
-                if (payload.size > 0) {
-                    serverSeq += payload.size
-                }
+                serverSeq += payload.size
             } catch (e: Exception) {
                 Log.e(TAG, "发包错误", e)
             }
+        }
+
+        private fun calculateTcpChecksum(packet: ByteArray, srcIp: ByteArray, dstIp: ByteArray, tcpLen: Int): Short {
+            // 伪首部：源IP(4) + 目标IP(4) + 保留(1) + 协议(1) + TCP长度(2)
+            val pseudoHeader = ByteArray(12)
+            System.arraycopy(srcIp, 0, pseudoHeader, 0, 4)
+            System.arraycopy(dstIp, 0, pseudoHeader, 4, 4)
+            pseudoHeader[8] = 0
+            pseudoHeader[9] = 6 // TCP
+            pseudoHeader[10] = ((tcpLen shr 8) and 0xFF).toByte()
+            pseudoHeader[11] = (tcpLen and 0xFF).toByte()
+
+            var sum = 0L
+            // 伪首部
+            for (i in 0 until 12 step 2) {
+                sum += ((pseudoHeader[i].toInt() and 0xFF) shl 8) or (pseudoHeader[i + 1].toInt() and 0xFF)
+            }
+            // TCP头 + 数据
+            for (i in 20 until packet.size step 2) {
+                if (i + 1 < packet.size) {
+                    sum += ((packet[i].toInt() and 0xFF) shl 8) or (packet[i + 1].toInt() and 0xFF)
+                } else {
+                    sum += (packet[i].toInt() and 0xFF) shl 8
+                }
+            }
+            while (sum shr 16 > 0) {
+                sum = (sum and 0xFFFF) + (sum shr 16)
+            }
+            return (sum.inv() and 0xFFFF).toShort()
         }
 
         fun onFin() {
@@ -318,8 +427,11 @@ class VpnCaptureService : VpnService() {
 
     private fun stopVpn() {
         running = false
-        sessions.values.forEach { it.close() }
-        sessions.clear()
+        tcpSessions.values.forEach { it.close() }
+        tcpSessions.clear()
+        try {
+            dnsSocket.close()
+        } catch (e: Exception) {}
         try {
             vpnInterface?.close()
         } catch (e: Exception) {}
