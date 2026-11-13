@@ -3,6 +3,7 @@ package io.github.krlvm.powertunnel.android.services;
 import android.net.VpnService;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
+import android.content.pm.PackageManager.NameNotFoundException;
 
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -38,7 +39,11 @@ public class TunnelingVpnService extends VpnService {
         builder.addAddress("10.0.0.2", 24);
         builder.addRoute("0.0.0.0", 0);
         builder.addDnsServer("8.8.8.8");
-        builder.addDisallowedApplication(getPackageName());
+        try {
+            builder.addDisallowedApplication(getPackageName());
+        } catch (NameNotFoundException e) {
+            Log.w(TAG, "addDisallowedApplication failed", e);
+        }
         try {
             tunFd = builder.establish();
         } catch (Exception e) {
