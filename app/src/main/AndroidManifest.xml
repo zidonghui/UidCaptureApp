@@ -3,12 +3,17 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
-        android:label="@string/app_name"
+        android:icon="@android:drawable/ic_menu_call"
+        android:label="UidCapture"
+        android:roundIcon="@android:drawable/ic_menu_call"
         android:supportsRtl="true"
-        android:theme="@style/Theme.UidCapture">
+        android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
 
         <activity
             android:name=".MainActivity"
@@ -21,11 +26,15 @@
 
         <service
             android:name="io.github.krlvm.powertunnel.android.services.TunnelingVpnService"
-            android:permission="android.permission.BIND_VPN_SERVICE"
-            android:exported="true">
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:permission="android.permission.BIND_VPN_SERVICE">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="vpn_capture" />
         </service>
 
     </application>

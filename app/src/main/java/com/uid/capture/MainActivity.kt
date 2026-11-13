@@ -1,16 +1,20 @@
 package com.uid.capture
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
-import android.util.Log
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import io.github.krlvm.powertunnel.android.services.TunnelingVpnService
 
 class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
@@ -29,22 +33,12 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
 
     companion object {
         private const val VPN_REQUEST_CODE = 1001
-        private const val TAG = "UidCapture"
+        private const val NOTIFICATION_REQUEST_CODE = 1002
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-
-        // 全局异常捕获，防止闪退
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            Log.e(TAG, "未捕获异常", throwable)
-            val errorMsg = "崩溃: ${throwable.javaClass.simpleName}: ${throwable.message}"
-            runOnUiThread {
-                tvStatus.text = errorMsg
-                Toast.makeText(this, errorMsg, Toast.LENGTH_LONG).show()
-            }
-        }
 
         tvStatus = findViewById(R.id.tvStatus)
         tvUid = findViewById(R.id.tvUid)
@@ -54,16 +48,14 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
         btnCopyUid = findViewById(R.id.btnCopyUid)
         btnCopyToken = findViewById(R.id.btnCopyToken)
 
+        // 请求通知权限（Android 13+）
+        requestNotificationPermission()
+
         btnToggle.setOnClickListener {
             if (vpnRunning) {
                 stopVpn()
             } else {
-                try {
-                    prepareAndStartVpn()
-                } catch (e: Exception) {
-                    tvStatus.text = "启动失败: ${e.message}"
-                    Log.e(TAG, "启动VPN失败", e)
-                }
+                prepareAndStartVpn()
             }
         }
 
@@ -84,6 +76,20 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
         }
     }
 
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    NOTIFICATION_REQUEST_CODE
+                )
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         TunnelingVpnService.setCallback(this)
@@ -95,7 +101,6 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
     }
 
     private fun prepareAndStartVpn() {
-        tvStatus.text = "正在准备VPN权限..."
         val prepareIntent = VpnService.prepare(this)
         if (prepareIntent != null) {
             startActivityForResult(prepareIntent, VPN_REQUEST_CODE)
@@ -115,15 +120,15 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
     }
 
     private fun startVpn() {
-        tvStatus.text = "正在启动VPN服务..."
         try {
             val intent = Intent(this, TunnelingVpnService::class.java)
-            startService(intent)
+            startForegroundService(intent)
             vpnRunning = true
             btnToggle.text = "停止VPN抓包"
+            tvStatus.text = "正在启动VPN..."
         } catch (e: Exception) {
-            tvStatus.text = "启动服务失败: ${e.message}"
-            Log.e(TAG, "startService失败", e)
+            tvStatus.text = "启动失败: ${e.message}"
+            e.printStackTrace()
         }
     }
 
