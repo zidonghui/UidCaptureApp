@@ -9,22 +9,25 @@ import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import io.github.krlvm.powertunnel.android.services.TunnelingVpnService
+import top.sankokomi.wirebare.kernel.common.WireBare
+import top.sankokomi.wirebare.kernel.interceptor.http.HttpHeaderParserInterceptor
+import top.sankokomi.wirebare.kernel.interceptor.http.HttpInterceptorFactory
+import top.sankokomi.wirebare.kernel.interceptor.http.async.AsyncHttpInterceptorFactory
 
-class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
+class MainActivity : AppCompatActivity() {
 
     private lateinit var tvStatus: TextView
     private lateinit var tvUid: TextView
     private lateinit var tvToken: TextView
     private lateinit var tvUserName: TextView
-    private lateinit var tvTargetHit: TextView
-    private lateinit var tvDebug: TextView
+    private lateinit var tvLog: TextView
     private lateinit var btnToggle: Button
     private lateinit var btnCopyUid: Button
     private lateinit var btnCopyToken: Button
@@ -32,11 +35,11 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
 
     private var currentUid: String? = null
     private var currentToken: String? = null
-    private val debugLogs = StringBuilder()
 
     companion object {
         private const val VPN_REQUEST_CODE = 1001
         private const val NOTIFICATION_REQUEST_CODE = 1002
+        private const val TAG = "UidCaptureApp"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -47,16 +50,40 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
         tvUid = findViewById(R.id.tvUid)
         tvToken = findViewById(R.id.tvToken)
         tvUserName = findViewById(R.id.tvUserName)
-        tvTargetHit = findViewById(R.id.tvTargetHit)
-        tvDebug = findViewById(R.id.tvDebug)
+        tvLog = findViewById(R.id.tvLog)
         btnToggle = findViewById(R.id.btnToggle)
         btnCopyUid = findViewById(R.id.btnCopyUid)
         btnCopyToken = findViewById(R.id.btnCopyToken)
 
         requestNotificationPermission()
 
+        WireBare.init(this)
+
+        UidCaptureInterceptor.onUidCaptured = { uid, token, userName ->
+            runOnUiThread {
+                currentUid = uid
+                currentToken = token
+                tvUid.text = uid
+                tvToken.text = token
+                tvUserName.text = "账号: $userName"
+                tvStatus.text = "✅ 捕获成功！"
+                Toast.makeText(this, "✅ 捕获UID: $uid", Toast.LENGTH_LONG).show()
+            }
+        }
+
+        UidCaptureInterceptor.onLog = { log ->
+            runOnUiThread {
+                tvLog.append("$log\n")
+                Log.d(TAG, log)
+            }
+        }
+
         btnToggle.setOnClickListener {
-            if (vpnRunning) stopVpn() else prepareAndStartVpn()
+            if (vpnRunning) {
+                stopVpn()
+            } else {
+                prepareAndStartVpn()
+            }
         }
 
         btnCopyUid.setOnClickListener {
@@ -90,16 +117,6 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        TunnelingVpnService.setCallback(this)
-    }
-
-    override fun onPause() {
-        super.onPause()
-        TunnelingVpnService.setCallback(null)
-    }
-
     private fun prepareAndStartVpn() {
         val prepareIntent = VpnService.prepare(this)
         if (prepareIntent != null) {
@@ -121,33 +138,43 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
 
     private fun startVpn() {
         try {
-            // 启动VPN时清空所有日志和命中记录
-            debugLogs.clear()
-            tvDebug.text = "✅ 已清空，等待新请求..."
-            tvTargetHit.text = ""
-            tvUid.text = "--"
-            tvToken.text = "--"
-            currentUid = null
-            currentToken = null
+            WireBare.startProxy {
+                addRoutes("0.0.0.0" to 0)
+                addDnsServers("8.8.8.8", "114.114.114.114")
 
-            val intent = Intent(this, TunnelingVpnService::class.java)
-            startForegroundService(intent)
+                addHttpInterceptor(listOf(
+                    HttpInterceptorFactory { HttpHeaderParserInterceptor() }
+                ))
+
+                addAsyncHttpInterceptor(listOf(
+                    AsyncHttpInterceptorFactory {
+                        UidCaptureInterceptor()
+                    }
+                ))
+            }
+
             vpnRunning = true
             btnToggle.text = "停止VPN抓包"
-            tvStatus.text = "正在启动VPN..."
+            tvStatus.text = "✅ VPN抓包已启动\n\n请打开游戏并登录"
+            tvLog.append("--- VPN启动成功 ---\n")
         } catch (e: Exception) {
             tvStatus.text = "启动失败: ${e.message}"
             e.printStackTrace()
+            Log.e(TAG, "启动失败", e)
         }
     }
 
     private fun stopVpn() {
-        val intent = Intent(this, TunnelingVpnService::class.java)
-        intent.action = "STOP"
-        startService(intent)
-        vpnRunning = false
-        btnToggle.text = "启动VPN抓包"
-        tvStatus.text = "VPN已停止"
+        try {
+            WireBare.stopProxy()
+            vpnRunning = false
+            btnToggle.text = "启动VPN抓包"
+            tvStatus.text = "VPN已停止"
+            tvLog.append("--- VPN已停止 ---\n")
+        } catch (e: Exception) {
+            tvStatus.text = "停止失败: ${e.message}"
+            e.printStackTrace()
+        }
     }
 
     private fun copyToClipboard(label: String, text: String) {
@@ -155,42 +182,5 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
         val clip = ClipData.newPlainText(label, text)
         clipboard.setPrimaryClip(clip)
         Toast.makeText(this, "✅ $label 已复制到剪贴板", Toast.LENGTH_SHORT).show()
-    }
-
-    override fun onCaptured(data: TunnelingVpnService.CapturedData?) {
-        runOnUiThread {
-            data ?: return@runOnUiThread
-            currentUid = data.uid
-            currentToken = data.token
-            tvUid.text = data.uid ?: "未知"
-            tvToken.text = data.token ?: "未知"
-            tvUserName.text = "账号: ${data.userName ?: "未知"}  年龄: ${data.age ?: "?"}"
-            tvStatus.text = "✅ 捕获成功！"
-        }
-    }
-
-    override fun onStatusChanged(status: String?) {
-        runOnUiThread { tvStatus.text = status ?: "" }
-    }
-
-    override fun onDebugLog(log: String?) {
-        runOnUiThread {
-            log ?: return@runOnUiThread
-            debugLogs.append(log).append("\n")
-            val lines = debugLogs.toString().lines()
-            tvDebug.text = if (lines.size > 20) {
-                lines.takeLast(20).joinToString("\n")
-            } else {
-                debugLogs.toString()
-            }
-        }
-    }
-
-    override fun onTargetHit(info: String?) {
-        runOnUiThread {
-            info ?: return@runOnUiThread
-            tvTargetHit.text = info
-            tvTargetHit.setTextColor(0xFFE53935.toInt())
-        }
     }
 }

@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "UidCaptureApp"
 include(":app")
+include(":wirebare-kernel")

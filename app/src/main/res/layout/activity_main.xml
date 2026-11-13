@@ -44,24 +44,12 @@
             android:id="@+id/tvStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="点击上方按钮启动VPN抓包"
+            android:text="点击上方按钮启动VPN\n启动后打开游戏登录即可自动抓取"
             android:textSize="14sp"
             android:textColor="#666666"
             android:background="#FFFFFF"
             android:padding="15dp"
             android:layout_marginBottom="20dp"/>
-
-        <!-- 命中目标高亮 -->
-        <TextView
-            android:id="@+id/tvTargetHit"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text=""
-            android:textSize="15sp"
-            android:textStyle="bold"
-            android:background="#FFF3E0"
-            android:padding="12dp"
-            android:layout_marginBottom="15dp"/>
 
         <TextView
             android:layout_width="match_parent"
@@ -154,7 +142,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="📋 调试日志（HTTP请求，已过滤CONNECT）"
+            android:text="📋 运行日志"
             android:textSize="14sp"
             android:textColor="#333333"
             android:textStyle="bold"
@@ -162,16 +150,16 @@
             android:layout_marginBottom="8dp"/>
 
         <TextView
-            android:id="@+id/tvDebug"
+            android:id="@+id/tvLog"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="暂无请求"
+            android:layout_height="200dp"
+            android:text=""
             android:textSize="11sp"
             android:textColor="#666666"
             android:background="#FFFFFF"
-            android:padding="12dp"
-            android:fontFamily="monospace"
-            android:minHeight="150dp"/>
+            android:padding="10dp"
+            android:gravity="top|start"
+            android:scrollbars="vertical"/>
 
     </LinearLayout>
 </ScrollView>
