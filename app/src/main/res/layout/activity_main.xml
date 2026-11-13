@@ -10,7 +10,6 @@
         android:orientation="vertical"
         android:padding="20dp">
 
-        <!-- 标题 -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -31,7 +30,6 @@
             android:gravity="center"
             android:layout_marginBottom="25dp"/>
 
-        <!-- 启动按钮 -->
         <Button
             android:id="@+id/btnToggle"
             android:layout_width="match_parent"
@@ -42,19 +40,17 @@
             android:textColor="#FFFFFF"
             android:layout_marginBottom="15dp"/>
 
-        <!-- 状态显示 -->
         <TextView
             android:id="@+id/tvStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="点击上方按钮启动VPN\n启动后打开游戏登录即可自动抓取"
+            android:text="点击上方按钮启动VPN抓包"
             android:textSize="14sp"
             android:textColor="#666666"
             android:background="#FFFFFF"
             android:padding="15dp"
             android:layout_marginBottom="20dp"/>
 
-        <!-- UID 卡片 -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -94,7 +90,6 @@
                 android:textColor="#FFFFFF"/>
         </LinearLayout>
 
-        <!-- Token 卡片 -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -134,7 +129,6 @@
                 android:textColor="#FFFFFF"/>
         </LinearLayout>
 
-        <!-- 用户信息 -->
         <TextView
             android:id="@+id/tvUserName"
             android:layout_width="match_parent"
@@ -144,6 +138,29 @@
             android:textColor="#999999"
             android:layout_marginTop="5dp"
             android:gravity="center"/>
+
+        <!-- 调试日志 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="📋 调试日志（经过代理的请求）"
+            android:textSize="14sp"
+            android:textColor="#333333"
+            android:textStyle="bold"
+            android:layout_marginTop="20dp"
+            android:layout_marginBottom="8dp"/>
+
+        <TextView
+            android:id="@+id/tvDebug"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="暂无请求"
+            android:textSize="11sp"
+            android:textColor="#666666"
+            android:background="#FFFFFF"
+            android:padding="12dp"
+            android:fontFamily="monospace"
+            android:minHeight="150dp"/>
 
     </LinearLayout>
 </ScrollView>
