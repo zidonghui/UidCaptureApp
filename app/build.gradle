@@ -54,6 +54,7 @@ dependencies {
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
 
-    implementation 'xyz.rogfam:littleproxy:2.0.0-beta-5'
+    // 官方 PowerTunnel 核心库（包含 LittleProxy、MITM、DNS 等所有功能）
+    implementation files('libs/core-2.5.2-all.jar')
     implementation 'com.alibaba:fastjson:1.2.83'
 }
