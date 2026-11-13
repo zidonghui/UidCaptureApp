@@ -46,6 +46,11 @@ android {
     kotlinOptions {
         jvmTarget = '1.8'
     }
+    packagingOptions {
+        exclude 'META-INF/AL2.0'
+        exclude 'META-INF/LGPL2.1'
+        exclude 'META-INF/*.kotlin_module'
+    }
 }
 
 dependencies {
@@ -57,4 +62,9 @@ dependencies {
     // 官方 PowerTunnel 核心库（包含 LittleProxy、MITM、DNS 等所有功能）
     implementation files('libs/core-2.5.2-all.jar')
     implementation 'com.alibaba:fastjson:1.2.83'
+}
+
+// 排除重复的 annotations 包（core jar 里已经有了）
+configurations.all {
+    exclude group: 'org.jetbrains', module: 'annotations'
 }
