@@ -21,6 +21,8 @@ import org.littleshoot.proxy.HttpFiltersAdapter;
 import org.littleshoot.proxy.HttpFiltersSourceAdapter;
 import org.littleshoot.proxy.HttpProxyServer;
 import org.littleshoot.proxy.impl.DefaultHttpProxyServer;
+import org.littleshoot.proxy.mitm.CertificateSniffingMitmManager;
+import org.littleshoot.proxy.mitm.RootCertificateException;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -134,10 +136,13 @@ public class TunnelingVpnService extends VpnService {
 
         notifyStatus("正在启动本地代理...");
         try {
+            // 创建 MITM 管理器，用于解密 HTTPS 流量
+            CertificateSniffingMitmManager mitmManager = new CertificateSniffingMitmManager();
+
             proxyServer = DefaultHttpProxyServer.bootstrap()
                     .withPort(PROXY_PORT)
-                    // 注意：不要加withTransparent(true)！
-                    // tun2http会自动把相对URL改成绝对URL，是标准正向代理格式
+                    .withTransparent(true)  // 透明代理模式
+                    .withManInTheMiddle(mitmManager)  // 启用 MITM 解密 HTTPS
                     .withFiltersSource(new HttpFiltersSourceAdapter() {
                         @Override
                         public HttpFilters filterRequest(HttpRequest originalRequest) {
@@ -205,8 +210,12 @@ public class TunnelingVpnService extends VpnService {
                         }
                     })
                     .start();
-            Log.d(TAG, "LittleProxy启动成功, 端口: " + PROXY_PORT);
-            notifyStatus("✅ 代理已启动，端口: " + PROXY_PORT);
+            Log.d(TAG, "LittleProxy启动成功, 端口: " + PROXY_PORT + " (MITM已启用)");
+            notifyStatus("✅ 代理已启动，端口: " + PROXY_PORT + " (MITM)");
+        } catch (RootCertificateException e) {
+            Log.e(TAG, "MITM证书创建失败", e);
+            notifyStatus("❌ MITM证书创建失败: " + e.getMessage());
+            return;
         } catch (Exception e) {
             Log.e(TAG, "LittleProxy启动失败", e);
             notifyStatus("❌ 代理启动失败: " + e.getMessage());
