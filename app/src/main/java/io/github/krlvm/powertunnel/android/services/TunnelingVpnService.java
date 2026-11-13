@@ -16,25 +16,14 @@ import androidx.core.app.NotificationCompat;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 
-import org.littleshoot.proxy.HttpFilters;
-import org.littleshoot.proxy.HttpFiltersAdapter;
-import org.littleshoot.proxy.HttpFiltersSourceAdapter;
-import org.littleshoot.proxy.HttpProxyServer;
-import org.littleshoot.proxy.impl.DefaultHttpProxyServer;
-import org.littleshoot.proxy.mitm.CertificateSniffingMitmManager;
-import org.littleshoot.proxy.mitm.RootCertificateException;
-
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.zip.GZIPInputStream;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.handler.codec.http.HttpObject;
-import io.netty.handler.codec.http.HttpRequest;
-import io.netty.handler.codec.http.HttpResponse;
-import io.netty.handler.codec.http.LastHttpContent;
+import io.github.krlvm.powertunnel.PowerTunnel;
+import io.github.krlvm.powertunnel.mitm.MITMAuthority;
+import io.github.krlvm.powertunnel.sdk.proxy.ProxyAddress;
+import io.github.krlvm.powertunnel.sdk.types.PowerTunnelPlatform;
 
 public class TunnelingVpnService extends VpnService {
 
@@ -46,7 +35,7 @@ public class TunnelingVpnService extends VpnService {
     private static final int PROXY_PORT = 8888;
 
     private ParcelFileDescriptor vpnInterface = null;
-    private HttpProxyServer proxyServer = null;
+    private PowerTunnel server = null;
     private int requestCount = 0;
 
     public interface CaptureCallback {
@@ -134,94 +123,54 @@ public class TunnelingVpnService extends VpnService {
     private void startVpn() {
         startForeground(NOTIFICATION_ID, buildNotification("VPN抓包运行中"));
 
-        notifyStatus("正在启动本地代理...");
+        notifyStatus("正在启动官方代理...");
         try {
-            // 创建 MITM 管理器，用于解密 HTTPS 流量
-            CertificateSniffingMitmManager mitmManager = new CertificateSniffingMitmManager();
+            // 创建 MITM 证书（官方方式）
+            MITMAuthority mitmAuthority = MITMAuthority.create(
+                    new File(getFilesDir(), "cert.p12"),
+                    "uidcapture".toCharArray()
+            );
 
-            proxyServer = DefaultHttpProxyServer.bootstrap()
-                    .withPort(PROXY_PORT)
-                    .withTransparent(true)  // 透明代理模式
-                    .withManInTheMiddle(mitmManager)  // 启用 MITM 解密 HTTPS
-                    .withFiltersSource(new HttpFiltersSourceAdapter() {
-                        @Override
-                        public HttpFilters filterRequest(HttpRequest originalRequest) {
-                            requestCount++;
-                            String method = originalRequest.method().name();
-                            String host = originalRequest.headers().get("Host");
-                            String uri = originalRequest.uri();
+            // DNS 服务器
+            List<String> dnsServers = getDefaultDns();
+            if (dnsServers.isEmpty()) {
+                dnsServers = new ArrayList<>();
+                dnsServers.add("8.8.8.8");
+            }
 
-                            // 所有请求都打印
-                            notifyDebug("#" + requestCount + " " + method + " " + host + uri);
+            // 创建官方 PowerTunnel 代理（完全复用官方配置）
+            server = new PowerTunnel(
+                    new ProxyAddress("127.0.0.1", PROXY_PORT),
+                    PowerTunnelPlatform.ANDROID,
+                    getFilesDir(),
+                    true,  // transparent_mode = true（官方默认）
+                    true,  // allowNonStrictDns
+                    dnsServers,
+                    new ArrayList<String>(),  // dnsSearchPath
+                    mitmAuthority,
+                    null,  // externalConfigsDir
+                    null
+            );
 
-                            // 专门检测 logs.quickapi.net
-                            String fullUrl = (host != null ? host : "") + (uri != null ? uri : "");
-                            if (fullUrl.contains("logs.quickapi.net")) {
-                                notifyTargetHit("🎯 检测到 logs.quickapi.net: " + method + " " + fullUrl);
-                                Log.d(TAG, "🎯 检测到目标域名: " + method + " " + fullUrl);
-                            }
+            // 启动代理（后台线程）
+            new Thread(() -> {
+                try {
+                    server.start();
+                    Log.d(TAG, "✅ 官方代理启动成功，端口: " + PROXY_PORT);
+                    notifyStatus("✅ 代理已启动，端口: " + PROXY_PORT);
+                } catch (Exception e) {
+                    Log.e(TAG, "代理启动失败", e);
+                    notifyStatus("❌ 代理启动失败: " + e.getMessage());
+                }
+            }, "Proxy Bootstrap").start();
 
-                            return new HttpFiltersAdapter(originalRequest) {
-                                private final ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
-                                private boolean isTargetRequest = false;
-                                private boolean isGzip = false;
-
-                                @Override
-                                public HttpResponse proxyToServerRequest(HttpObject httpObject) {
-                                    if (httpObject instanceof HttpRequest) {
-                                        HttpRequest req = (HttpRequest) httpObject;
-                                        String h = req.headers().get("Host");
-                                        String u = req.uri();
-
-                                        if (h != null && h.contains("logs.quickapi.net")
-                                                && u != null && u.contains("checkLogin")
-                                                && !"CONNECT".equals(req.method().name())) {
-                                            isTargetRequest = true;
-                                            Log.d(TAG, "🎯 命中目标HTTP请求: " + h + u);
-                                        }
-                                    }
-                                    return super.proxyToServerRequest(httpObject);
-                                }
-
-                                @Override
-                                public HttpObject serverToProxyResponse(HttpObject httpObject) {
-                                    if (!isTargetRequest) {
-                                        return super.serverToProxyResponse(httpObject);
-                                    }
-
-                                    if (httpObject instanceof HttpResponse) {
-                                        bodyStream.reset();
-                                        HttpResponse resp = (HttpResponse) httpObject;
-                                        String encoding = resp.headers().get("Content-Encoding");
-                                        isGzip = encoding != null && encoding.contains("gzip");
-                                    }
-
-                                    if (httpObject instanceof LastHttpContent) {
-                                        ByteBuf buf = ((LastHttpContent) httpObject).content();
-                                        byte[] bytes = new byte[buf.readableBytes()];
-                                        buf.readBytes(bytes);
-                                        try { bodyStream.write(bytes); } catch (Exception e) {}
-                                        byte[] rawBody = bodyStream.toByteArray();
-                                        parseResponse(rawBody, isGzip);
-                                    }
-                                    return super.serverToProxyResponse(httpObject);
-                                }
-                            };
-                        }
-                    })
-                    .start();
-            Log.d(TAG, "LittleProxy启动成功, 端口: " + PROXY_PORT + " (MITM已启用)");
-            notifyStatus("✅ 代理已启动，端口: " + PROXY_PORT + " (MITM)");
-        } catch (RootCertificateException e) {
-            Log.e(TAG, "MITM证书创建失败", e);
-            notifyStatus("❌ MITM证书创建失败: " + e.getMessage());
-            return;
         } catch (Exception e) {
-            Log.e(TAG, "LittleProxy启动失败", e);
-            notifyStatus("❌ 代理启动失败: " + e.getMessage());
+            Log.e(TAG, "代理初始化失败", e);
+            notifyStatus("❌ 代理初始化失败: " + e.getMessage());
             return;
         }
 
+        // 建立 VPN
         Builder builder = new Builder();
         builder.setSession("UidCapture VPN");
         builder.setConfigureIntent(PendingIntent.getActivity(
@@ -257,52 +206,20 @@ public class TunnelingVpnService extends VpnService {
             return;
         }
 
-        notifyStatus("正在转发流量到代理...");
-        try {
-            jni_start(vpnInterface.getFd(), false, 3, "127.0.0.1", PROXY_PORT, true);
-            notifyStatus("✅ VPN抓包已启动\n\n请打开游戏并登录\n\n--- 调试: 所有请求 ---");
-        } catch (Throwable t) {
-            Log.e(TAG, "jni_start失败", t);
-            notifyStatus("❌ 流量转发失败: " + t.getMessage());
-        }
-    }
+        // 等待代理启动后再启动 tun2http
+        new Thread(() -> {
+            try {
+                // 等待代理启动
+                Thread.sleep(2000);
 
-    private void parseResponse(byte[] rawBody, boolean isGzip) {
-        try {
-            String body;
-            if (isGzip) {
-                ByteArrayInputStream bis = new ByteArrayInputStream(rawBody);
-                GZIPInputStream gis = new GZIPInputStream(bis);
-                ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                byte[] buffer = new byte[4096];
-                int len;
-                while ((len = gis.read(buffer)) != -1) bos.write(buffer, 0, len);
-                body = bos.toString("UTF-8");
-                gis.close();
-            } else {
-                body = new String(rawBody, "UTF-8");
+                notifyStatus("正在转发流量到代理...");
+                jni_start(vpnInterface.getFd(), false, 3, "127.0.0.1", PROXY_PORT, true);
+                notifyStatus("✅ VPN抓包已启动\n\n请打开游戏并登录\n\n--- 调试: 所有请求 ---");
+            } catch (Throwable t) {
+                Log.e(TAG, "jni_start失败", t);
+                notifyStatus("❌ 流量转发失败: " + t.getMessage());
             }
-
-            Log.d(TAG, "📦 响应明文: " + body);
-
-            JSONObject jsonObj = JSON.parseObject(body);
-            JSONObject data = jsonObj.getJSONObject("data");
-            if (data != null) {
-                CapturedData cd = new CapturedData();
-                cd.uid = data.getString("uid");
-                cd.token = data.getString("token");
-                cd.userName = data.getString("user_name");
-                cd.userToken = data.getString("user_token");
-                cd.age = data.getString("age");
-                cd.realName = data.getString("realName");
-
-                Log.d(TAG, "✅ 成功解析 UID=" + cd.uid);
-                notifyCaptured(cd);
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "解析响应失败", e);
-            notifyStatus("❌ 解析失败: " + e.getMessage());
-        }
+        }, "Tun2Http Starter").start();
     }
 
     private void stopVpn() {
@@ -313,9 +230,9 @@ public class TunnelingVpnService extends VpnService {
                 vpnInterface = null;
             }
         } catch (Exception e) {}
-        if (proxyServer != null) {
-            try { proxyServer.stop(); } catch (Exception ignored) {}
-            proxyServer = null;
+        if (server != null) {
+            try { server.stop(true); } catch (Exception ignored) {}
+            server = null;
         }
         notifyStatus("VPN已停止");
         stopForeground(true);
