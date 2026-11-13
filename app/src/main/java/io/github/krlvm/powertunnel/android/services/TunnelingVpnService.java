@@ -45,10 +45,12 @@ public class TunnelingVpnService extends VpnService {
 
     private ParcelFileDescriptor vpnInterface = null;
     private HttpProxyServer proxyServer = null;
+    private int requestCount = 0;
 
     public interface CaptureCallback {
         void onCaptured(CapturedData data);
         void onStatusChanged(String status);
+        void onDebugLog(String log);
     }
 
     public static class CapturedData {
@@ -71,6 +73,14 @@ public class TunnelingVpnService extends VpnService {
         CaptureCallback cb = callback;
         if (cb != null) {
             cb.onStatusChanged(status);
+        }
+    }
+
+    private void notifyDebug(String log) {
+        Log.d(TAG, "调试: " + log);
+        CaptureCallback cb = callback;
+        if (cb != null) {
+            cb.onDebugLog(log);
         }
     }
 
@@ -107,11 +117,7 @@ public class TunnelingVpnService extends VpnService {
     public void onCreate() {
         super.onCreate();
         createNotificationChannels();
-        try {
-            jni_init();
-        } catch (Throwable t) {
-            Log.e(TAG, "jni_init失败", t);
-        }
+        try { jni_init(); } catch (Throwable t) { Log.e(TAG, "jni_init失败", t); }
     }
 
     @Override
@@ -140,6 +146,11 @@ public class TunnelingVpnService extends VpnService {
                     .withFiltersSource(new HttpFiltersSourceAdapter() {
                         @Override
                         public HttpFilters filterRequest(HttpRequest originalRequest) {
+                            requestCount++;
+                            String host = originalRequest.headers().get("Host");
+                            String uri = originalRequest.uri();
+                            notifyDebug("#" + requestCount + " " + host + uri);
+
                             return new HttpFiltersAdapter(originalRequest) {
                                 private final ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
                                 private boolean isTargetRequest = false;
@@ -149,12 +160,12 @@ public class TunnelingVpnService extends VpnService {
                                 public HttpResponse proxyToServerRequest(HttpObject httpObject) {
                                     if (httpObject instanceof HttpRequest) {
                                         HttpRequest req = (HttpRequest) httpObject;
-                                        String host = req.headers().get("Host");
-                                        String uri = req.uri();
-                                        if (host != null && host.contains("logs.quickapi.net")
-                                                && uri != null && uri.contains("checkLogin")) {
+                                        String h = req.headers().get("Host");
+                                        String u = req.uri();
+                                        if (h != null && h.contains("logs.quickapi.net")
+                                                && u != null && u.contains("checkLogin")) {
                                             isTargetRequest = true;
-                                            Log.d(TAG, "🎯 命中目标请求: " + host + uri);
+                                            Log.d(TAG, "🎯 命中目标请求: " + h + u);
                                         }
                                     }
                                     return super.proxyToServerRequest(httpObject);
@@ -177,11 +188,7 @@ public class TunnelingVpnService extends VpnService {
                                         ByteBuf buf = ((LastHttpContent) httpObject).content();
                                         byte[] bytes = new byte[buf.readableBytes()];
                                         buf.readBytes(bytes);
-                                        try {
-                                            bodyStream.write(bytes);
-                                        } catch (Exception e) {
-                                            Log.e(TAG, "write body error", e);
-                                        }
+                                        try { bodyStream.write(bytes); } catch (Exception e) {}
                                         byte[] rawBody = bodyStream.toByteArray();
                                         parseResponse(rawBody, isGzip);
                                     }
@@ -192,6 +199,7 @@ public class TunnelingVpnService extends VpnService {
                     })
                     .start();
             Log.d(TAG, "LittleProxy启动成功, 端口: " + PROXY_PORT);
+            notifyStatus("✅ 代理已启动，端口: " + PROXY_PORT);
         } catch (Exception e) {
             Log.e(TAG, "LittleProxy启动失败", e);
             notifyStatus("❌ 代理启动失败: " + e.getMessage());
@@ -209,12 +217,7 @@ public class TunnelingVpnService extends VpnService {
 
         builder.addAddress("10.1.10.1", 32);
         builder.addRoute("0.0.0.0", 0);
-        try {
-            builder.setMtu(jni_get_mtu());
-        } catch (Throwable t) {
-            Log.w(TAG, "jni_get_mtu失败，用默认值1500", t);
-            builder.setMtu(1500);
-        }
+        try { builder.setMtu(jni_get_mtu()); } catch (Throwable t) { builder.setMtu(1500); }
 
         List<String> dnsServers = getDefaultDns();
         if (dnsServers.isEmpty()) {
@@ -225,11 +228,7 @@ public class TunnelingVpnService extends VpnService {
             }
         }
 
-        try {
-            builder.addDisallowedApplication(getPackageName());
-        } catch (Exception e) {
-            Log.w(TAG, "Cannot exclude own package", e);
-        }
+        try { builder.addDisallowedApplication(getPackageName()); } catch (Exception e) {}
 
         try {
             vpnInterface = builder.establish();
@@ -250,12 +249,11 @@ public class TunnelingVpnService extends VpnService {
         notifyStatus("正在转发流量到代理...");
         try {
             jni_start(vpnInterface.getFd(), false, 3, "127.0.0.1", PROXY_PORT, true);
+            notifyStatus("✅ VPN抓包已启动\n\n请打开游戏并登录\nUID将自动显示在这里\n\n--- 调试: 经过代理的请求 ---\n");
         } catch (Throwable t) {
             Log.e(TAG, "jni_start失败", t);
             notifyStatus("❌ 流量转发失败: " + t.getMessage());
         }
-
-        notifyStatus("✅ VPN抓包已启动\n\n请打开游戏并登录\nUID将自动显示在这里");
     }
 
     private void parseResponse(byte[] rawBody, boolean isGzip) {
@@ -305,9 +303,7 @@ public class TunnelingVpnService extends VpnService {
                 vpnInterface.close();
                 vpnInterface = null;
             }
-        } catch (Exception e) {
-            Log.e(TAG, "Error closing VPN", e);
-        }
+        } catch (Exception e) {}
 
         if (proxyServer != null) {
             try { proxyServer.stop(); } catch (Exception ignored) {}
@@ -348,11 +344,9 @@ public class TunnelingVpnService extends VpnService {
     private void createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager nm = getSystemService(NotificationManager.class);
-
             NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID, "UidCapture VPN", NotificationManager.IMPORTANCE_LOW);
             if (nm != null) nm.createNotificationChannel(channel);
-
             NotificationChannel capturedChannel = new NotificationChannel(
                     CHANNEL_CAPTURED, "捕获成功通知", NotificationManager.IMPORTANCE_HIGH);
             if (nm != null) nm.createNotificationChannel(capturedChannel);
@@ -371,11 +365,9 @@ public class TunnelingVpnService extends VpnService {
     private void showCapturedNotification(String uid) {
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm == null) return;
-
         Intent intent = new Intent(this, com.uid.capture.MainActivity.class);
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
         PendingIntent pi = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE);
-
         Notification notif = new NotificationCompat.Builder(this, CHANNEL_CAPTURED)
                 .setContentTitle("✅ 捕获成功")
                 .setContentText("UID: " + uid)
@@ -384,7 +376,6 @@ public class TunnelingVpnService extends VpnService {
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .build();
-
         nm.notify(CAPTURED_NOTIFY_ID, notif);
     }
 }
