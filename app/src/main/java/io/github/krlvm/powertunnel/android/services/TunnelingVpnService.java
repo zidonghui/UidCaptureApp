@@ -136,7 +136,8 @@ public class TunnelingVpnService extends VpnService {
         try {
             proxyServer = DefaultHttpProxyServer.bootstrap()
                     .withPort(PROXY_PORT)
-                    .withTransparent(true)  // 关键：启用透明代理模式，支持相对URI
+                    // 注意：不要加withTransparent(true)！
+                    // tun2http会自动把相对URL改成绝对URL，是标准正向代理格式
                     .withFiltersSource(new HttpFiltersSourceAdapter() {
                         @Override
                         public HttpFilters filterRequest(HttpRequest originalRequest) {
