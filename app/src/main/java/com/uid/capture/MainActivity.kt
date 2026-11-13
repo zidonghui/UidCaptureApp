@@ -23,6 +23,7 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
     private lateinit var tvUid: TextView
     private lateinit var tvToken: TextView
     private lateinit var tvUserName: TextView
+    private lateinit var tvTargetHit: TextView
     private lateinit var tvDebug: TextView
     private lateinit var btnToggle: Button
     private lateinit var btnCopyUid: Button
@@ -46,6 +47,7 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
         tvUid = findViewById(R.id.tvUid)
         tvToken = findViewById(R.id.tvToken)
         tvUserName = findViewById(R.id.tvUserName)
+        tvTargetHit = findViewById(R.id.tvTargetHit)
         tvDebug = findViewById(R.id.tvDebug)
         btnToggle = findViewById(R.id.btnToggle)
         btnCopyUid = findViewById(R.id.btnCopyUid)
@@ -54,11 +56,7 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
         requestNotificationPermission()
 
         btnToggle.setOnClickListener {
-            if (vpnRunning) {
-                stopVpn()
-            } else {
-                prepareAndStartVpn()
-            }
+            if (vpnRunning) stopVpn() else prepareAndStartVpn()
         }
 
         btnCopyUid.setOnClickListener {
@@ -125,6 +123,7 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
         try {
             debugLogs.clear()
             tvDebug.text = ""
+            tvTargetHit.text = ""
             val intent = Intent(this, TunnelingVpnService::class.java)
             startForegroundService(intent)
             vpnRunning = true
@@ -157,32 +156,35 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
             data ?: return@runOnUiThread
             currentUid = data.uid
             currentToken = data.token
-
             tvUid.text = data.uid ?: "未知"
             tvToken.text = data.token ?: "未知"
             tvUserName.text = "账号: ${data.userName ?: "未知"}  年龄: ${data.age ?: "?"}"
-
             tvStatus.text = "✅ 捕获成功！"
         }
     }
 
     override fun onStatusChanged(status: String?) {
-        runOnUiThread {
-            tvStatus.text = status ?: ""
-        }
+        runOnUiThread { tvStatus.text = status ?: "" }
     }
 
     override fun onDebugLog(log: String?) {
         runOnUiThread {
             log ?: return@runOnUiThread
             debugLogs.append(log).append("\n")
-            // 只显示最近20行
             val lines = debugLogs.toString().lines()
-            if (lines.size > 20) {
-                tvDebug.text = lines.takeLast(20).joinToString("\n")
+            tvDebug.text = if (lines.size > 15) {
+                lines.takeLast(15).joinToString("\n")
             } else {
-                tvDebug.text = debugLogs.toString()
+                debugLogs.toString()
             }
+        }
+    }
+
+    override fun onTargetHit(info: String?) {
+        runOnUiThread {
+            info ?: return@runOnUiThread
+            tvTargetHit.text = info
+            tvTargetHit.setTextColor(0xFFE53935.toInt())
         }
     }
 }

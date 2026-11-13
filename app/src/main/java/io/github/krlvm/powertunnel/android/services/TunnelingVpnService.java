@@ -29,7 +29,6 @@ import java.util.List;
 import java.util.zip.GZIPInputStream;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpObject;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
@@ -52,6 +51,7 @@ public class TunnelingVpnService extends VpnService {
         void onCaptured(CapturedData data);
         void onStatusChanged(String status);
         void onDebugLog(String log);
+        void onTargetHit(String info);
     }
 
     public static class CapturedData {
@@ -70,15 +70,18 @@ public class TunnelingVpnService extends VpnService {
     }
 
     private void notifyStatus(String status) {
-        Log.d(TAG, "状态: " + status);
         CaptureCallback cb = callback;
         if (cb != null) cb.onStatusChanged(status);
     }
 
     private void notifyDebug(String log) {
-        Log.d(TAG, "调试: " + log);
         CaptureCallback cb = callback;
         if (cb != null) cb.onDebugLog(log);
+    }
+
+    private void notifyTargetHit(String info) {
+        CaptureCallback cb = callback;
+        if (cb != null) cb.onTargetHit(info);
     }
 
     private void notifyCaptured(CapturedData data) {
@@ -140,8 +143,11 @@ public class TunnelingVpnService extends VpnService {
                             String method = originalRequest.method().name();
                             String host = originalRequest.headers().get("Host");
                             String uri = originalRequest.uri();
-                            // 打印所有请求，包括GET/POST/CONNECT
-                            notifyDebug("#" + requestCount + " " + method + " " + host + uri);
+
+                            // 过滤掉CONNECT请求，只显示普通HTTP请求
+                            if (!"CONNECT".equals(method)) {
+                                notifyDebug("#" + requestCount + " " + method + " " + host + uri);
+                            }
 
                             return new HttpFiltersAdapter(originalRequest) {
                                 private final ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
@@ -154,14 +160,12 @@ public class TunnelingVpnService extends VpnService {
                                         HttpRequest req = (HttpRequest) httpObject;
                                         String h = req.headers().get("Host");
                                         String u = req.uri();
-                                        String m = req.method().name();
 
-                                        // 检查是否目标请求（HTTP明文请求）
                                         if (h != null && h.contains("logs.quickapi.net")
                                                 && u != null && u.contains("checkLogin")) {
                                             isTargetRequest = true;
-                                            Log.d(TAG, "🎯 命中目标请求: " + m + " " + h + u);
-                                            notifyDebug("🎯 命中目标: " + m + " " + h + u);
+                                            Log.d(TAG, "🎯 命中目标请求: " + h + u);
+                                            notifyTargetHit("🎯 命中: " + h + u);
                                         }
                                     }
                                     return super.proxyToServerRequest(httpObject);
@@ -240,7 +244,7 @@ public class TunnelingVpnService extends VpnService {
         notifyStatus("正在转发流量到代理...");
         try {
             jni_start(vpnInterface.getFd(), false, 3, "127.0.0.1", PROXY_PORT, true);
-            notifyStatus("✅ VPN抓包已启动\n\n请打开游戏并登录\n\n--- 调试: 经过代理的请求 ---");
+            notifyStatus("✅ VPN抓包已启动\n\n请打开游戏并登录\n\n--- 调试: HTTP请求（已过滤CONNECT）---");
         } catch (Throwable t) {
             Log.e(TAG, "jni_start失败", t);
             notifyStatus("❌ 流量转发失败: " + t.getMessage());
