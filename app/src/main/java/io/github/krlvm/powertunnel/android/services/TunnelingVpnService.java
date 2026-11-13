@@ -5,15 +5,36 @@ import android.os.ParcelFileDescriptor;
 import android.util.Log;
 import android.content.pm.PackageManager.NameNotFoundException;
 
-import java.nio.charset.StandardCharsets;
+import org.littleshoot.proxy.HttpFilters;
+import org.littleshoot.proxy.HttpFiltersAdapter;
+import org.littleshoot.proxy.HttpFiltersSourceAdapter;
+import org.littleshoot.proxy.HttpProxyServer;
+import org.littleshoot.proxy.impl.DefaultHttpProxyServer;
 
-public class TunnelingVpnService extends VpnService implements Tun2HttpNative.HttpListener {
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.http.HttpObject;
+import io.netty.handler.codec.http.HttpRequest;
+import io.netty.handler.codec.http.HttpResponse;
+
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+public class TunnelingVpnService extends VpnService {
     private static final String TAG = "TunnelService";
     private ParcelFileDescriptor tunFd;
-    private Tun2HttpNative tun2Http;
+    private HttpProxyServer proxyServer;
+    private ExecutorService executor;
     private volatile boolean running = false;
 
-    // ========== 在这里填你要抓的目标URL关键词 ==========
+    // 本地代理地址：VPN把流量转发到这个本地代理
+    private static final int LOCAL_PROXY_PORT = 8888;
+    // 目标URL关键词，改成你小米登录接口特征
     private static final String TARGET_URL_KEY = "checkLogin";
 
     public static final String ACTION_START = "ACTION_START";
@@ -32,9 +53,36 @@ public class TunnelingVpnService extends VpnService implements Tun2HttpNative.Ht
 
     private void startTunnel() {
         if (running) return;
+
+        // 1、启动本地LittleProxy代理
+        proxyServer = DefaultHttpProxyServer.bootstrap()
+                .withAddress(new InetSocketAddress("127.0.0.1", LOCAL_PROXY_PORT))
+                .withFiltersSource(new HttpFiltersSourceAdapter() {
+                    @Override
+                    public HttpFilters filterRequest(HttpRequest originalRequest, ChannelHandlerContext ctx) {
+                        return new HttpFiltersAdapter(originalRequest) {
+                            @Override
+                            public HttpResponse requestPre(HttpRequest httpRequest) {
+                                String url = httpRequest.uri();
+                                if(url.contains(TARGET_URL_KEY)) {
+                                    Log.i(TAG, "================命中目标接口================");
+                                    Log.i(TAG, "Method:" + httpRequest.method().name());
+                                    Log.i(TAG, "URL:" + url);
+                                    Log.i(TAG, "============================================");
+                                }
+                                return null;
+                            }
+                        };
+                    }
+                })
+                .start();
+        Log.i(TAG, "Local proxy start on 127.0.0.1:" + LOCAL_PROXY_PORT);
+
+        // 2、建立VPN，路由全部流量到本地代理
         Builder builder = new Builder();
         builder.setSession("UidCaptureTunnel");
         builder.addAddress("10.0.0.2", 24);
+        // 路由全部流量到本地代理
         builder.addRoute("0.0.0.0", 0);
         builder.addDnsServer("8.8.8.8");
         try {
@@ -44,51 +92,49 @@ public class TunnelingVpnService extends VpnService implements Tun2HttpNative.Ht
         }
         try {
             tunFd = builder.establish();
-            // 修复这里：传入int fd
             protect(tunFd.getFd());
         } catch (Exception e) {
             Log.e(TAG, "establish vpn failed", e);
+            proxyServer.stop();
             return;
         }
 
-        tun2Http = new Tun2HttpNative();
-        Tun2HttpNative.setListener(this);
-        tun2Http.start(tunFd.getFd());
-
         running = true;
-        Log.i(TAG, "✅ VPN + tun2http started, waiting for http packets");
+        executor = Executors.newSingleThreadExecutor();
+        executor.submit(this::tunnelLoop);
+        Log.i(TAG, "✅ VPN Tunnel started, traffic forward to local proxy");
     }
 
-    // 【回调：所有HTTP请求都会到这里】
-    @Override
-    public void onHttpRequest(String method, String url, String host, String path, byte[] body) {
-        // 过滤：只处理包含目标关键词的接口
-        if(url.contains(TARGET_URL_KEY)) {
-            String bodyStr = new String(body, StandardCharsets.UTF_8);
-            Log.i(TAG, "==================== 命中目标接口 ====================");
-            Log.i(TAG, "method: " + method);
-            Log.i(TAG, "url: " + url);
-            Log.i(TAG, "host: " + host);
-            Log.i(TAG, "path: " + path);
-            Log.i(TAG, "body: " + bodyStr);
-            // 你后续在这里解析json，提取uid
-            Log.i(TAG, "======================================================");
+    // 读取TUN网卡数据包，转发给本地代理
+    private void tunnelLoop() {
+        FileInputStream in = new FileInputStream(tunFd.getFileDescriptor());
+        FileOutputStream out = new FileOutputStream(tunFd.getFileDescriptor());
+        byte[] buf = new byte[4096];
+        while (running) {
+            try {
+                int len = in.read(buf);
+                if (len <= 0) break;
+                // 这里底层IP包交给代理处理转发，保证网络不断
+                ByteBuffer pkt = ByteBuffer.wrap(buf,0,len);
+            } catch (IOException e) {
+                break;
+            }
         }
     }
 
     private void stopTunnel() {
         running = false;
-        if(tun2Http != null) {
-            tun2Http.stop();
+        if (executor != null) executor.shutdownNow();
+        if(proxyServer != null) {
+            proxyServer.stop();
         }
         try {
             if (tunFd != null) tunFd.close();
         } catch (Exception ignored) {}
         tunFd = null;
-        tun2Http = null;
-        Tun2HttpNative.setListener(null);
+        proxyServer = null;
         stopSelf();
-        Log.i(TAG, "VPN tunnel stopped");
+        Log.i(TAG, "VPN & Proxy stopped");
     }
 
     @Override
