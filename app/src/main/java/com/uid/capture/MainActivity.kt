@@ -121,9 +121,15 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
 
     private fun startVpn() {
         try {
+            // 启动VPN时清空所有日志和命中记录
             debugLogs.clear()
-            tvDebug.text = ""
+            tvDebug.text = "✅ 已清空，等待新请求..."
             tvTargetHit.text = ""
+            tvUid.text = "--"
+            tvToken.text = "--"
+            currentUid = null
+            currentToken = null
+
             val intent = Intent(this, TunnelingVpnService::class.java)
             startForegroundService(intent)
             vpnRunning = true
@@ -172,8 +178,8 @@ class MainActivity : AppCompatActivity(), TunnelingVpnService.CaptureCallback {
             log ?: return@runOnUiThread
             debugLogs.append(log).append("\n")
             val lines = debugLogs.toString().lines()
-            tvDebug.text = if (lines.size > 15) {
-                lines.takeLast(15).joinToString("\n")
+            tvDebug.text = if (lines.size > 20) {
+                lines.takeLast(20).joinToString("\n")
             } else {
                 debugLogs.toString()
             }
