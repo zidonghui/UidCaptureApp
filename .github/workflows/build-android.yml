@@ -27,6 +27,12 @@ jobs:
       - name: Grant execute permission
         run: chmod +x gradlew
 
+      # 解码keystore
+      - name: Decode Keystore
+        run: |
+          base64 -d app/uid-capture.keystore.b64 > app/uid-capture.keystore
+          echo "✅ Keystore decoded"
+
       - name: Build Release APK
         run: ./gradlew assembleRelease
 
