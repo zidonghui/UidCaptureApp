@@ -4,7 +4,6 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
-import android.content.Context;
 import android.content.Intent;
 import android.net.VpnService;
 import android.os.Build;
@@ -25,13 +24,11 @@ import org.littleshoot.proxy.impl.DefaultHttpProxyServer;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.GZIPInputStream;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpObject;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
@@ -70,6 +67,7 @@ public class TunnelingVpnService extends VpnService {
     }
 
     private void notifyStatus(String status) {
+        Log.d(TAG, "状态: " + status);
         CaptureCallback cb = callback;
         if (cb != null) {
             cb.onStatusChanged(status);
@@ -81,16 +79,21 @@ public class TunnelingVpnService extends VpnService {
         if (cb != null) {
             cb.onCaptured(data);
         }
-        // 同时弹Toast
         new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> {
-            Toast.makeText(this, "✅ 捕获UID: " + data.uid, Toast.LENGTH_LONG).show();
+            try {
+                Toast.makeText(this, "✅ 捕获UID: " + data.uid, Toast.LENGTH_LONG).show();
+            } catch (Exception ignored) {}
         });
-        // 通知栏也显示
         showCapturedNotification(data.uid);
     }
 
     static {
-        System.loadLibrary("tun2http");
+        try {
+            System.loadLibrary("tun2http");
+            Log.d(TAG, "native库加载成功");
+        } catch (UnsatisfiedLinkError e) {
+            Log.e(TAG, "native库加载失败! 架构不兼容?", e);
+        }
     }
 
     private native void jni_init();
@@ -104,7 +107,11 @@ public class TunnelingVpnService extends VpnService {
     public void onCreate() {
         super.onCreate();
         createNotificationChannels();
-        jni_init();
+        try {
+            jni_init();
+        } catch (Throwable t) {
+            Log.e(TAG, "jni_init失败", t);
+        }
     }
 
     @Override
@@ -113,76 +120,83 @@ public class TunnelingVpnService extends VpnService {
             stopVpn();
             return START_NOT_STICKY;
         }
-        startVpn();
+        try {
+            startVpn();
+        } catch (Exception e) {
+            Log.e(TAG, "startVpn异常", e);
+            notifyStatus("❌ 启动失败: " + e.getMessage());
+        }
         return START_STICKY;
     }
 
     private void startVpn() {
         startForeground(NOTIFICATION_ID, buildNotification("VPN抓包运行中"));
 
-        // 1. Start LittleProxy on 127.0.0.1:8888
+        // 1. Start LittleProxy
         notifyStatus("正在启动本地代理...");
-        proxyServer = DefaultHttpProxyServer.bootstrap()
-                .withPort(PROXY_PORT)
-                .withFiltersSource(new HttpFiltersSourceAdapter() {
-                    @Override
-                    public HttpFilters filterRequest(HttpRequest originalRequest) {
-                        return new HttpFiltersAdapter(originalRequest) {
-                            private final ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
-                            private boolean isTargetRequest = false;
-                            private boolean isGzip = false;
+        try {
+            proxyServer = DefaultHttpProxyServer.bootstrap()
+                    .withPort(PROXY_PORT)
+                    .withFiltersSource(new HttpFiltersSourceAdapter() {
+                        @Override
+                        public HttpFilters filterRequest(HttpRequest originalRequest) {
+                            return new HttpFiltersAdapter(originalRequest) {
+                                private final ByteArrayOutputStream bodyStream = new ByteArrayOutputStream();
+                                private boolean isTargetRequest = false;
+                                private boolean isGzip = false;
 
-                            @Override
-                            public HttpResponse proxyToServerRequest(HttpObject httpObject) {
-                                // 判断是否目标请求
-                                if (httpObject instanceof HttpRequest) {
-                                    HttpRequest req = (HttpRequest) httpObject;
-                                    String host = req.headers().get("Host");
-                                    String uri = req.uri();
-                                    if (host != null && host.contains("logs.quickapi.net")
-                                            && uri != null && uri.contains("checkLogin")) {
-                                        isTargetRequest = true;
-                                        Log.d(TAG, "🎯 命中目标请求: " + host + uri);
+                                @Override
+                                public HttpResponse proxyToServerRequest(HttpObject httpObject) {
+                                    if (httpObject instanceof HttpRequest) {
+                                        HttpRequest req = (HttpRequest) httpObject;
+                                        String host = req.headers().get("Host");
+                                        String uri = req.uri();
+                                        if (host != null && host.contains("logs.quickapi.net")
+                                                && uri != null && uri.contains("checkLogin")) {
+                                            isTargetRequest = true;
+                                            Log.d(TAG, "🎯 命中目标请求: " + host + uri);
+                                        }
                                     }
+                                    return super.proxyToServerRequest(httpObject);
                                 }
-                                return super.proxyToServerRequest(httpObject);
-                            }
 
-                            @Override
-                            public HttpObject serverToProxyResponse(HttpObject httpObject) {
-                                if (!isTargetRequest) {
+                                @Override
+                                public HttpObject serverToProxyResponse(HttpObject httpObject) {
+                                    if (!isTargetRequest) {
+                                        return super.serverToProxyResponse(httpObject);
+                                    }
+
+                                    if (httpObject instanceof HttpResponse) {
+                                        bodyStream.reset();
+                                        HttpResponse resp = (HttpResponse) httpObject;
+                                        String encoding = resp.headers().get("Content-Encoding");
+                                        isGzip = encoding != null && encoding.contains("gzip");
+                                    }
+
+                                    if (httpObject instanceof LastHttpContent) {
+                                        ByteBuf buf = ((LastHttpContent) httpObject).content();
+                                        byte[] bytes = new byte[buf.readableBytes()];
+                                        buf.readBytes(bytes);
+                                        try {
+                                            bodyStream.write(bytes);
+                                        } catch (Exception e) {
+                                            Log.e(TAG, "write body error", e);
+                                        }
+                                        byte[] rawBody = bodyStream.toByteArray();
+                                        parseResponse(rawBody, isGzip);
+                                    }
                                     return super.serverToProxyResponse(httpObject);
                                 }
-
-                                if (httpObject instanceof HttpResponse) {
-                                    bodyStream.reset();
-                                    HttpResponse resp = (HttpResponse) httpObject;
-                                    // 检查是否gzip压缩
-                                    String encoding = resp.headers().get("Content-Encoding");
-                                    isGzip = encoding != null && encoding.contains("gzip");
-                                    Log.d(TAG, "响应 Content-Encoding: " + encoding + ", isGzip=" + isGzip);
-                                }
-
-                                if (httpObject instanceof LastHttpContent) {
-                                    ByteBuf buf = ((LastHttpContent) httpObject).content();
-                                    byte[] bytes = new byte[buf.readableBytes()];
-                                    buf.readBytes(bytes);
-                                    try {
-                                        bodyStream.write(bytes);
-                                    } catch (Exception e) {
-                                        Log.e(TAG, "write body error", e);
-                                    }
-
-                                    // 全部接收完，解析
-                                    byte[] rawBody = bodyStream.toByteArray();
-                                    parseResponse(rawBody, isGzip);
-                                }
-                                return super.serverToProxyResponse(httpObject);
-                            }
-                        };
-                    }
-                })
-                .start();
+                            };
+                        }
+                    })
+                    .start();
+            Log.d(TAG, "LittleProxy启动成功, 端口: " + PROXY_PORT);
+        } catch (Exception e) {
+            Log.e(TAG, "LittleProxy启动失败", e);
+            notifyStatus("❌ 代理启动失败: " + e.getMessage());
+            return;
+        }
 
         // 2. Establish VPN
         notifyStatus("正在建立VPN连接...");
@@ -195,9 +209,13 @@ public class TunnelingVpnService extends VpnService {
 
         builder.addAddress("10.1.10.1", 32);
         builder.addRoute("0.0.0.0", 0);
-        builder.setMtu(jni_get_mtu());
+        try {
+            builder.setMtu(jni_get_mtu());
+        } catch (Throwable t) {
+            Log.w(TAG, "jni_get_mtu失败，用默认值1500", t);
+            builder.setMtu(1500);
+        }
 
-        // DNS servers
         List<String> dnsServers = getDefaultDns();
         if (dnsServers.isEmpty()) {
             builder.addDnsServer("8.8.8.8");
@@ -207,23 +225,35 @@ public class TunnelingVpnService extends VpnService {
             }
         }
 
-        // Exclude our own app from VPN to avoid loops
         try {
             builder.addDisallowedApplication(getPackageName());
         } catch (Exception e) {
             Log.w(TAG, "Cannot exclude own package", e);
         }
 
-        vpnInterface = builder.establish();
-        if (vpnInterface == null) {
-            notifyStatus("❌ VPN建立失败，请检查权限");
+        try {
+            vpnInterface = builder.establish();
+        } catch (Exception e) {
+            Log.e(TAG, "VPN建立失败", e);
+            notifyStatus("❌ VPN建立失败: " + e.getMessage());
             stopVpn();
             return;
         }
 
-        // 3. Start native tun2http, forwarding to local proxy
+        if (vpnInterface == null) {
+            notifyStatus("❌ VPN建立失败，返回null");
+            stopVpn();
+            return;
+        }
+
+        // 3. Start native tun2http
         notifyStatus("正在转发流量到代理...");
-        jni_start(vpnInterface.getFd(), false, 3, "127.0.0.1", PROXY_PORT, true);
+        try {
+            jni_start(vpnInterface.getFd(), false, 3, "127.0.0.1", PROXY_PORT, true);
+        } catch (Throwable t) {
+            Log.e(TAG, "jni_start失败", t);
+            notifyStatus("❌ 流量转发失败: " + t.getMessage());
+        }
 
         notifyStatus("✅ VPN抓包已启动\n\n请打开游戏并登录\nUID将自动显示在这里");
     }
@@ -232,7 +262,6 @@ public class TunnelingVpnService extends VpnService {
         try {
             String body;
             if (isGzip) {
-                // gzip解压
                 ByteArrayInputStream bis = new ByteArrayInputStream(rawBody);
                 GZIPInputStream gis = new GZIPInputStream(bis);
                 ByteArrayOutputStream bos = new ByteArrayOutputStream();
@@ -272,11 +301,7 @@ public class TunnelingVpnService extends VpnService {
     private void stopVpn() {
         try {
             if (vpnInterface != null) {
-                try {
-                    jni_stop(vpnInterface.getFd());
-                } catch (Throwable t) {
-                    try { jni_stop(-1); } catch (Throwable ignored) {}
-                }
+                try { jni_stop(vpnInterface.getFd()); } catch (Throwable ignored) {}
                 vpnInterface.close();
                 vpnInterface = null;
             }
@@ -304,7 +329,7 @@ public class TunnelingVpnService extends VpnService {
     public void onDestroy() {
         super.onDestroy();
         stopVpn();
-        jni_done();
+        try { jni_done(); } catch (Throwable ignored) {}
     }
 
     private List<String> getDefaultDns() {
