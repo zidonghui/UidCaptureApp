@@ -136,6 +136,7 @@ public class TunnelingVpnService extends VpnService {
         try {
             proxyServer = DefaultHttpProxyServer.bootstrap()
                     .withPort(PROXY_PORT)
+                    .withTransparent(true)  // 关键：启用透明代理模式，支持相对URI
                     .withFiltersSource(new HttpFiltersSourceAdapter() {
                         @Override
                         public HttpFilters filterRequest(HttpRequest originalRequest) {
@@ -144,13 +145,13 @@ public class TunnelingVpnService extends VpnService {
                             String host = originalRequest.headers().get("Host");
                             String uri = originalRequest.uri();
 
-                            // 所有请求都打印，包括CONNECT
+                            // 所有请求都打印
                             notifyDebug("#" + requestCount + " " + method + " " + host + uri);
 
-                            // 专门检测 logs.quickapi.net 的所有请求（包括CONNECT）
+                            // 专门检测 logs.quickapi.net
                             String fullUrl = (host != null ? host : "") + (uri != null ? uri : "");
                             if (fullUrl.contains("logs.quickapi.net")) {
-                                notifyTargetHit("🎯 检测到 logs.quickapi.net 请求: " + method + " " + fullUrl);
+                                notifyTargetHit("🎯 检测到 logs.quickapi.net: " + method + " " + fullUrl);
                                 Log.d(TAG, "🎯 检测到目标域名: " + method + " " + fullUrl);
                             }
 
@@ -166,7 +167,6 @@ public class TunnelingVpnService extends VpnService {
                                         String h = req.headers().get("Host");
                                         String u = req.uri();
 
-                                        // 只对HTTP明文POST/GET请求做响应解析
                                         if (h != null && h.contains("logs.quickapi.net")
                                                 && u != null && u.contains("checkLogin")
                                                 && !"CONNECT".equals(req.method().name())) {
