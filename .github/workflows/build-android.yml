@@ -27,17 +27,18 @@ jobs:
       - name: Grant execute permission
         run: chmod +x gradlew
 
-      # 解码keystore
+      # 解码keystore到app目录
       - name: Decode Keystore
         run: |
           base64 -d app/uid-capture.keystore.b64 > app/uid-capture.keystore
+          ls -la app/uid-capture.keystore
           echo "✅ Keystore decoded"
 
       - name: Build Release APK
         run: ./gradlew assembleRelease
 
-      - name: Upload APK
+      - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk
+          name: UidCapture_Signed_APK
           path: app/build/outputs/apk/release/*.apk
