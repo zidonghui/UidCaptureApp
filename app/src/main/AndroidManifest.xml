@@ -4,14 +4,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_VPN" />
-    <uses-permission android:name="android.permission.BIND_VPN_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+        android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
 
         <activity
             android:name=".MainActivity"
@@ -23,12 +23,16 @@
         </activity>
 
         <service
-            android:name="com.wirebare.kernel.service.WireBareVpnService"
-            android:permission="android.permission.BIND_VPN_SERVICE"
-            android:exported="true">
+            android:name=".VpnCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:permission="android.permission.BIND_VPN_SERVICE">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="vpn_capture" />
         </service>
 
     </application>

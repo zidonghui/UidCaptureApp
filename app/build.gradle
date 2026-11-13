@@ -13,8 +13,6 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
-
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -44,21 +42,10 @@ android {
     kotlinOptions {
         jvmTarget = '1.8'
     }
-    packagingOptions {
-        exclude 'META-INF/AL2.0'
-        exclude 'META-INF/LGPL2.1'
-        exclude 'META-INF/*.kotlin_module'
-    }
 }
 
 dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.11.0'
-    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
-    implementation 'com.alibaba:fastjson:1.2.83'
-
-    // wirebare-kernel VPN抓包库
-    implementation project(':wirebare-kernel')
-
 }

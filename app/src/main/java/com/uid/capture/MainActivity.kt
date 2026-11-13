@@ -5,66 +5,65 @@ import android.net.VpnService
 import android.os.Bundle
 import android.widget.Button
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.wirebare.kernel.WireBare
-import com.wirebare.kernel.interceptor.http.HttpInterceptor
-import com.wirebare.kernel.model.HttpMessage
-import java.nio.charset.StandardCharsets
 
 class MainActivity : AppCompatActivity() {
     private lateinit var tvLog: TextView
+    private lateinit var tvUid: TextView
     private lateinit var btnStart: Button
     private lateinit var btnStop: Button
 
-    private var wireBare: WireBare? = null
+    companion object {
+        private const val VPN_REQUEST_CODE = 1001
+        var onLog: ((String) -> Unit)? = null
+        var onUidCaptured: ((String) -> Unit)? = null
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         tvLog = findViewById(R.id.tvLog)
+        tvUid = findViewById(R.id.tvUid)
         btnStart = findViewById(R.id.btnStartVpn)
         btnStop = findViewById(R.id.btnStopVpn)
 
-        val captureInterceptor = object : HttpInterceptor {
-            override fun onHttpMessage(msg: HttpMessage) {
-                val body = msg.body.toString(StandardCharsets.UTF_8)
-                if (body.contains("uid")) {
-                    runOnUiThread {
-                        tvLog.append("\n✅抓到uid响应：\n$body")
-                    }
-                }
+        onLog = { msg ->
+            runOnUiThread { tvLog.append("\n$msg") }
+        }
+
+        onUidCaptured = { uid ->
+            runOnUiThread {
+                tvUid.text = "UID: $uid"
+                Toast.makeText(this, "✅ 捕获UID: $uid", Toast.LENGTH_LONG).show()
             }
         }
 
         btnStart.setOnClickListener {
-            val prepareIntent = VpnService.prepare(this@MainActivity)
+            val prepareIntent = VpnService.prepare(this)
             if (prepareIntent != null) {
-                startActivityForResult(prepareIntent, 1001)
+                startActivityForResult(prepareIntent, VPN_REQUEST_CODE)
             } else {
-                startWireBare()
+                startVpn()
             }
         }
 
         btnStop.setOnClickListener {
-            wireBare?.stop()
-            tvLog.text = "WireBare VPN 已停止"
+            stopService(Intent(this, VpnCaptureService::class.java))
+            tvLog.append("\nVPN已停止")
         }
-
-        wireBare = WireBare.Builder()
-            .addInterceptor(captureInterceptor)
-            .build()
     }
 
-    private fun startWireBare() {
-        wireBare?.start(this)
-        tvLog.text = "VPN已启动，打开游戏抓uid..."
-    }
-
-    @Suppress("DEPRECATION")
+    @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if(requestCode == 1001 && resultCode == RESULT_OK){
-            startWireBare()
+        if (requestCode == VPN_REQUEST_CODE && resultCode == RESULT_OK) {
+            startVpn()
         }
+    }
+
+    private fun startVpn() {
+        startService(Intent(this, VpnCaptureService::class.java))
+        tvLog.append("\nVPN已启动，请打开游戏登录")
     }
 }
