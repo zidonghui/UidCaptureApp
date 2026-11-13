@@ -44,7 +44,8 @@ public class TunnelingVpnService extends VpnService implements Tun2HttpNative.Ht
         }
         try {
             tunFd = builder.establish();
-            protect(tunFd.getFileDescriptor());
+            // 修复这里：传入int fd
+            protect(tunFd.getFd());
         } catch (Exception e) {
             Log.e(TAG, "establish vpn failed", e);
             return;
