@@ -16,41 +16,16 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # 下载指定版本gradle（8.2，和你项目匹配）
       - name: Install Gradle 8.2
         run: |
           wget https://services.gradle.org/distributions/gradle-8.2-bin.zip
           unzip gradle-8.2-bin.zip
           export PATH=$PWD/gradle-8.2/bin:$PATH
           gradle --version
-          # 生成wrapper（这一步会自动生成正确的gradle-wrapper.jar）
           gradle wrapper --gradle-version 8.2
 
       - name: Grant execute permission
         run: chmod +x gradlew
-
-      # 解码 keystore（从 GitHub Secrets）
-      - name: Decode Keystore
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | base64 -d > app/uid-capture.keystore
-            echo "✅ Keystore decoded successfully"
-          else
-            echo "⚠️ KEYSTORE_BASE64 secret not set, building unsigned APK"
-          fi
-
-      # 设置签名环境变量
-      - name: Set Signing Env
-        run: |
-          if [ -f "app/uid-capture.keystore" ]; then
-            echo "KEYSTORE_FILE=app/uid-capture.keystore" >> $GITHUB_ENV
-            echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
-            echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> $GITHUB_ENV
-            echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> $GITHUB_ENV
-            echo "✅ Signing env set"
-          fi
 
       - name: Build Release APK
         run: ./gradlew assembleRelease

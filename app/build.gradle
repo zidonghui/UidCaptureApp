@@ -19,13 +19,10 @@ android {
 
     signingConfigs {
         release {
-            // 从环境变量读取，GitHub Actions 注入 Secrets
-            if (System.getenv("KEYSTORE_FILE") != null) {
-                storeFile file(System.getenv("KEYSTORE_FILE"))
-                storePassword System.getenv("KEYSTORE_PASSWORD")
-                keyAlias System.getenv("KEY_ALIAS")
-                keyPassword System.getenv("KEY_PASSWORD")
-            }
+            storeFile file("uid-capture.keystore")
+            storePassword "uidcapture2024"
+            keyAlias "uid-capture"
+            keyPassword "uidcapture2024"
         }
     }
 
@@ -33,10 +30,7 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            // 如果有签名配置就用，没有就生成未签名包
-            if (System.getenv("KEYSTORE_FILE") != null) {
-                signingConfig signingConfigs.release
-            }
+            signingConfig signingConfigs.release
         }
     }
     compileOptions {
